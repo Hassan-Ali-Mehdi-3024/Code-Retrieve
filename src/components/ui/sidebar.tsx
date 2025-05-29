@@ -1,3 +1,4 @@
+
 "use client"
 
 import * as React from "react"
@@ -198,6 +199,7 @@ const Sidebar = React.forwardRef<
           <SheetContent
             data-sidebar="sidebar"
             data-mobile="true"
+            aria-label="Main navigation"
             className="w-[--sidebar-width] bg-sidebar p-0 text-sidebar-foreground [&>button]:hidden"
             style={
               {
