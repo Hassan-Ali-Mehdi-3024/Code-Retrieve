@@ -47,9 +47,11 @@ import { Select as ShadSelect, SelectContent, SelectItem, SelectTrigger, SelectV
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase/config";
-import { collection, addDoc, getDocs, Timestamp, query, orderBy, doc, updateDoc, deleteDoc, serverTimestamp, where, writeBatch } from "firebase/firestore";
-import { format } from "date-fns";
+import { collection, addDoc, getDocs, Timestamp, query, orderBy, doc, updateDoc, deleteDoc, serverTimestamp, where, getDoc } from "firebase/firestore"; // Added getDoc
+import { format, addDays } from "date-fns";
 import type { UserProfile } from "@/types";
+import type { Estimate, LineItem as EstimateLineItem } from "../estimates/page"; // Assuming Estimate types are exported
+import { generateInvoiceNumber, type InvoiceStatus, type InvoiceLineItem } from "../invoices/page"; // Assuming Invoice types/utils are exported
 
 interface Customer {
   id: string;
@@ -62,7 +64,7 @@ interface Technician extends UserProfile {
   // UserProfile already covers uid, displayName, email, role
 }
 
-type JobStatus = "Pending Schedule" | "Scheduled" | "Dispatched" | "In Progress" | "On Hold" | "Completed" | "Cancelled" | "Requires Follow-up";
+export type JobStatus = "Pending Schedule" | "Scheduled" | "Dispatched" | "In Progress" | "On Hold" | "Completed" | "Cancelled" | "Requires Follow-up";
 
 const ALL_JOB_STATUSES: JobStatus[] = ["Pending Schedule", "Scheduled", "Dispatched", "In Progress", "On Hold", "Completed", "Cancelled", "Requires Follow-up"];
 
@@ -70,10 +72,10 @@ interface Job {
   id: string;
   jobNumber: string;
   customerId: string;
-  customerName: string; // Denormalized
-  customerEmail?: string; // Denormalized
+  customerName: string; 
+  customerEmail?: string; 
   assignedTechnicianId?: string | null;
-  technicianName?: string | null; // Denormalized
+  technicianName?: string | null; 
   description: string;
   status: JobStatus;
   dateCreated: Timestamp;
@@ -82,7 +84,8 @@ interface Job {
   notes?: string | null;
   internalNotes?: string | null;
   lastUpdated?: Timestamp;
-  estimateId?: string | null; // Optional link to an estimate
+  estimateId?: string | null; 
+  invoiceCreated?: boolean; // To track if an invoice has been created
 }
 
 const jobSchema = z.object({
@@ -97,10 +100,9 @@ const jobSchema = z.object({
   estimateId: z.string().optional().nullable(),
 });
 
-// Schema for technician status update
 const technicianJobUpdateSchema = z.object({
     status: z.enum(ALL_JOB_STATUSES),
-    notes: z.string().optional().nullable(), // Technician might add notes when updating status
+    notes: z.string().optional().nullable(), 
 });
 
 
@@ -118,7 +120,7 @@ const getStatusBadgeVariant = (status: JobStatus) => {
   }
 };
 
-const generateJobNumber = async (): Promise<string> => {
+export const generateJobNumber = async (): Promise<string> => { // Export for use in Estimate automation
   const prefix = "JOB-";
   const datePart = format(new Date(), "yyyyMMdd");
   const jobsRef = collection(db, "jobs");
@@ -250,6 +252,81 @@ export default function AdminJobsPage() {
     }
   });
 
+  const createInvoiceFromJob = async (job: Job, jobId: string) => {
+    if (job.invoiceCreated) {
+        toast({ title: "Info", description: "Invoice already created for this job.", variant: "default"});
+        return;
+    }
+    try {
+        const invoiceNumber = await generateInvoiceNumber();
+        let lineItems: InvoiceLineItem[] = [];
+        let taxRate = 0.0; // Default tax rate
+
+        if (job.estimateId) {
+            const estimateDocSnap = await getDoc(doc(db, "estimates", job.estimateId));
+            if (estimateDocSnap.exists()) {
+                const estimateData = estimateDocSnap.data() as Estimate;
+                lineItems = estimateData.lineItems.map(li => ({ 
+                    id: crypto.randomUUID(), 
+                    description: li.description,
+                    quantity: li.quantity,
+                    unitPrice: li.unitPrice,
+                    totalPrice: li.totalPrice,
+                }));
+                taxRate = estimateData.taxRate; // Use tax rate from estimate
+            }
+        }
+
+        if (lineItems.length === 0) {
+            // Create a generic line item if no estimate details are found
+            lineItems.push({ 
+                id: crypto.randomUUID(), 
+                description: `Services for job ${job.jobNumber}`, 
+                quantity: 1, 
+                unitPrice: 0, // This should ideally be derived from job actuals or estimate
+                totalPrice: 0  // This should ideally be derived from job actuals or estimate
+            });
+        }
+        
+        const subtotal = lineItems.reduce((acc, item) => acc + item.totalPrice, 0);
+        const taxAmount = subtotal * taxRate;
+        const totalAmount = subtotal + taxAmount;
+
+        const newInvoiceData = {
+            invoiceNumber,
+            customerId: job.customerId,
+            customerName: job.customerName,
+            customerEmail: job.customerEmail || undefined,
+            jobId: jobId,
+            estimateId: job.estimateId || null,
+            dateCreated: serverTimestamp(),
+            dueDate: Timestamp.fromDate(addDays(new Date(), 30)), // Default due date
+            lineItems,
+            subtotal,
+            taxRate,
+            taxAmount,
+            totalAmount,
+            status: "Draft" as InvoiceStatus,
+            notes: `Invoice for completed job: ${job.jobNumber}`,
+            lastUpdated: serverTimestamp(),
+            paidAmount: 0,
+            paymentDate: null,
+        };
+
+        await addDoc(collection(db, "invoices"), newInvoiceData);
+        
+        // Mark invoice as created on the job
+        const jobDocRef = doc(db, "jobs", jobId);
+        await updateDoc(jobDocRef, { invoiceCreated: true, lastUpdated: serverTimestamp() });
+
+        toast({ title: "Invoice Created", description: `Invoice ${invoiceNumber} automatically created for job ${job.jobNumber}.` });
+        fetchJobs(); // Refresh jobs to show invoiceCreated status
+    } catch (error) {
+        console.error("Error creating invoice from job: ", error);
+        toast({ title: "Invoice Creation Error", description: "Failed to automatically create invoice.", variant: "destructive" });
+    }
+};
+
 
   async function onAdminSubmit(values: z.infer<typeof jobSchema>) {
     if (!canManageJobs) {
@@ -257,6 +334,9 @@ export default function AdminJobsPage() {
         return;
     }
     setIsSubmitting(true);
+    let finalJobData: Job;
+    let jobIdToUpdate: string | undefined = selectedJob?.id;
+
     try {
       const selectedCustomerDoc = customers.find(c => c.id === values.customerId);
       if (!selectedCustomerDoc) {
@@ -266,7 +346,7 @@ export default function AdminJobsPage() {
       }
       const selectedTechnicianDoc = values.assignedTechnicianId ? technicians.find(t => t.uid === values.assignedTechnicianId) : null;
 
-      const jobDataForDb: Partial<Job> = {
+      const jobDataForDb: Partial<Omit<Job, 'id' | 'jobNumber' | 'dateCreated' | 'lastUpdated' | 'invoiceCreated'>> & { lastUpdated?: Timestamp, dateCreated?: Timestamp, invoiceCreated?: boolean } = {
         customerId: selectedCustomerDoc.id,
         customerName: selectedCustomerDoc.companyName,
         customerEmail: selectedCustomerDoc.email || undefined,
@@ -275,27 +355,43 @@ export default function AdminJobsPage() {
         description: values.description,
         status: values.status,
         scheduledDate: values.scheduledDate ? Timestamp.fromDate(values.scheduledDate) : null,
-        completionDate: values.status === "Completed" && !values.completionDate ? serverTimestamp() as Timestamp : (values.completionDate ? Timestamp.fromDate(values.completionDate) : null),
+        completionDate: values.status === "Completed" && (!selectedJob || selectedJob.status !== "Completed") ? serverTimestamp() as Timestamp : (values.completionDate ? Timestamp.fromDate(values.completionDate) : null),
         notes: values.notes || null,
         internalNotes: values.internalNotes || null,
         estimateId: values.estimateId || null,
-        lastUpdated: serverTimestamp() as Timestamp,
       };
 
-      if (selectedJob) { // Editing
+      if (selectedJob) { 
         const jobDocRef = doc(db, "jobs", selectedJob.id);
-        await updateDoc(jobDocRef, jobDataForDb); 
+        await updateDoc(jobDocRef, {...jobDataForDb, lastUpdated: serverTimestamp() as Timestamp}); 
         toast({ title: "Job Updated", description: `Job ${selectedJob.jobNumber} has been updated.` });
-      } else { // Adding
+        finalJobData = { ...selectedJob, ...jobDataForDb, status: values.status, lastUpdated: Timestamp.now() };
+
+      } else { 
         const jobNumber = await generateJobNumber();
-        const newJobData = {
+        const newJobDataWithTimestamps = {
             ...jobDataForDb,
             jobNumber,
             dateCreated: serverTimestamp() as Timestamp,
+            lastUpdated: serverTimestamp() as Timestamp,
+            invoiceCreated: false,
         }
-        const jobsCollectionRef = collection(db, "jobs");
-        await addDoc(jobsCollectionRef, newJobData);
+        const docRef = await addDoc(collection(db, "jobs"), newJobDataWithTimestamps);
+        jobIdToUpdate = docRef.id;
         toast({ title: "Job Created", description: `Job ${jobNumber} has been created.` });
+        finalJobData = { 
+            ...newJobDataWithTimestamps, 
+            id: docRef.id, 
+            dateCreated: Timestamp.now(), // Approx for immediate use
+            lastUpdated: Timestamp.now(), // Approx for immediate use
+        } as Job;
+      }
+      
+      // Automation: Create invoice if status is "Completed"
+      if (values.status === "Completed" && jobIdToUpdate && (!selectedJob || selectedJob.status !== "Completed")) {
+         if (!finalJobData.invoiceCreated) {
+            await createInvoiceFromJob(finalJobData, jobIdToUpdate);
+         }
       }
       
       adminForm.reset();
@@ -326,17 +422,7 @@ export default function AdminJobsPage() {
         estimateId: jobToEdit.estimateId || "",
       });
     } else {
-      adminForm.reset({ 
-        customerId: "",
-        assignedTechnicianId: "",
-        description: "",
-        status: "Pending Schedule",
-        scheduledDate: null,
-        completionDate: null,
-        notes: "",
-        internalNotes: "",
-        estimateId: "",
-      });
+      adminForm.reset();
     }
     setIsFormDialogOpen(true);
   };
@@ -372,10 +458,17 @@ export default function AdminJobsPage() {
         await updateDoc(jobDocRef, updateData);
         toast({ title: "Job Status Updated", description: `Status for job ${selectedJob.jobNumber} updated to ${values.status}.`});
         
-        // Optimistically update local state or refetch
-        setJobs(prevJobs => prevJobs.map(j => j.id === selectedJob.id ? {...j, ...updateData, lastUpdated: Timestamp.now(), completionDate: values.status === "Completed" ? Timestamp.now() : j.completionDate } : j ));
-        setSelectedJob(prev => prev ? {...prev, ...updateData, lastUpdated: Timestamp.now(), completionDate: values.status === "Completed" ? Timestamp.now() : prev.completionDate } : null);
+        const updatedJobInState = { ...selectedJob, ...updateData, lastUpdated: Timestamp.now(), completionDate: (values.status === "Completed" && !selectedJob.completionDate) ? Timestamp.now() : selectedJob.completionDate };
+        setJobs(prevJobs => prevJobs.map(j => j.id === selectedJob.id ? updatedJobInState : j ));
+        setSelectedJob(updatedJobInState);
 
+        // Automation: Create invoice if status is "Completed" by technician
+        if (values.status === "Completed" && selectedJob.status !== "Completed") {
+            if (!updatedJobInState.invoiceCreated) {
+                await createInvoiceFromJob(updatedJobInState, selectedJob.id);
+            }
+        }
+        // No need to call fetchJobs() here due to optimistic update and automation refresh.
     } catch (error) {
         console.error("Error updating job status by technician:", error);
         toast({ title: "Update Error", description: "Failed to update job status.", variant: "destructive" });
@@ -571,6 +664,7 @@ export default function AdminJobsPage() {
                 <strong className="text-muted-foreground">Created:</strong><p>{selectedJob.dateCreated ? format(selectedJob.dateCreated.toDate(), "PP") : 'N/A'}</p>
                 <strong className="text-muted-foreground">Last Updated:</strong><p>{selectedJob.lastUpdated ? format(selectedJob.lastUpdated.toDate(), "PPp") : 'N/A'}</p>
                 {selectedJob.estimateId && <><strong className="text-muted-foreground">Estimate ID:</strong><p>{selectedJob.estimateId}</p></>}
+                {selectedJob.invoiceCreated && <><strong className="text-muted-foreground">Invoice Created:</strong><p className="text-green-600">Yes</p></>}
               </div>
               
               <div>
@@ -615,14 +709,14 @@ export default function AdminJobsPage() {
                                 </FormItem>
                             )}
                         />
-                        <Button type="submit" disabled={isSubmitting} size="sm">
+                        <Button type="submit" disabled={isSubmitting || selectedJob.status === 'Completed'} size="sm">
                             {isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving Status...</> : <><Save className="mr-2 h-4 w-4" />Save Status Update</>}
                         </Button>
                     </form>
                  </Form>
               )}
 
-              {selectedJob.notes && (!technicianUpdateForm.getValues("notes") || userProfile?.role === 'admin') && ( // Show original notes if not editing them or if admin
+              {selectedJob.notes && (!technicianUpdateForm.getValues("notes") || userProfile?.role === 'admin') && ( 
                 <div>
                   <h4 className="font-semibold text-muted-foreground mb-1 mt-3">Customer Notes:</h4>
                   <p className="bg-muted/30 p-3 rounded-md whitespace-pre-wrap">{selectedJob.notes}</p>
@@ -640,7 +734,7 @@ export default function AdminJobsPage() {
           <DialogFooter className="pt-4">
             <Button variant="outline" onClick={() => setIsViewDialogOpen(false)}>Close</Button>
             {canManageJobs && selectedJob &&
-              <Button onClick={() => { setIsViewDialogOpen(false); handleOpenFormDialog(selectedJob); }}>
+              <Button onClick={() => { setIsViewDialogOpen(false); handleOpenFormDialog(selectedJob); }} disabled={selectedJob.status === 'Completed' && selectedJob.invoiceCreated}>
                   <Edit className="mr-2 h-4 w-4" /> Edit Job
               </Button>
             }
@@ -729,8 +823,8 @@ export default function AdminJobsPage() {
                         <Button variant="outline" size="sm" onClick={() => handleViewJob(job)}><Eye className="mr-1 h-3 w-3" /> View</Button>
                         {canManageJobs && (
                           <>
-                          <Button variant="outline" size="sm" onClick={() => handleOpenFormDialog(job)}><Edit className="mr-1 h-3 w-3" /> Edit</Button>
-                          <Button variant="destructive" size="sm" onClick={() => handleDeleteJob(job)}><Trash2 className="mr-1 h-3 w-3" /> Delete</Button>
+                          <Button variant="outline" size="sm" onClick={() => handleOpenFormDialog(job)} disabled={job.status === 'Completed' && job.invoiceCreated}><Edit className="mr-1 h-3 w-3" /> Edit</Button>
+                          <Button variant="destructive" size="sm" onClick={() => handleDeleteJob(job)} disabled={job.status === 'Completed' && job.invoiceCreated}><Trash2 className="mr-1 h-3 w-3" /> Delete</Button>
                           </>
                         )}
                       </td>
@@ -753,3 +847,4 @@ export default function AdminJobsPage() {
   );
 }
 
+    

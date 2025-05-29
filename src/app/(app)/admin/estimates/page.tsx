@@ -1,10 +1,10 @@
 
 "use client";
 
-import React from "react"; // Added React import
+import React from "react"; 
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react"; // Added useCallback
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -46,23 +46,23 @@ import { Calendar } from "@/components/ui/calendar";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase/config";
-import { collection, addDoc, getDocs, Timestamp, query, orderBy, doc, updateDoc, deleteDoc, serverTimestamp, where, writeBatch } from "firebase/firestore";
+import { collection, addDoc, getDocs, Timestamp, query, orderBy, doc, updateDoc, deleteDoc, serverTimestamp, where } from "firebase/firestore";
 import { format, addDays } from "date-fns";
-import type { UserProfile } from "@/types"; // Assuming UserProfile type is defined
+import type { UserProfile } from "@/types"; 
+import type { JobStatus } from "../jobs/page"; // Assuming JobStatus is exported from jobs page
+import { generateJobNumber } from "../jobs/page"; // Assuming generateJobNumber is exported
 
-// Assuming Customer type is available, e.g., from customer page or types file
 interface Customer {
   id: string;
   companyName: string;
   contactName: string;
   email: string;
-  // Add other fields as necessary from your customer data structure
 }
 
 type EstimateStatus = "Draft" | "Sent" | "Accepted" | "Rejected" | "Expired";
 
 interface LineItem {
-  id: string; // for unique key in rendering
+  id: string; 
   description: string;
   quantity: number;
   unitPrice: number;
@@ -73,22 +73,23 @@ interface Estimate {
   id: string;
   estimateNumber: string;
   customerId: string;
-  customerName: string; // Denormalized for easy display
-  customerEmail?: string; // Denormalized
+  customerName: string; 
+  customerEmail?: string; 
   dateCreated: Timestamp;
   validUntil: Timestamp;
   status: EstimateStatus;
   lineItems: LineItem[];
   subtotal: number;
-  taxRate: number; // e.g., 0.08 for 8%
+  taxRate: number; 
   taxAmount: number;
   totalAmount: number;
   notes?: string | null;
   lastUpdated?: Timestamp;
+  jobCreated?: boolean; // To track if a job has been created from this estimate
 }
 
 const lineItemSchema = z.object({
-  id: z.string().optional(), // Optional for new items
+  id: z.string().optional(), 
   description: z.string().min(1, "Description is required."),
   quantity: z.coerce.number().min(0.01, "Quantity must be greater than 0."),
   unitPrice: z.coerce.number().min(0, "Unit price cannot be negative."),
@@ -96,7 +97,6 @@ const lineItemSchema = z.object({
 
 const estimateSchema = z.object({
   customerId: z.string().min(1, "Customer is required."),
-  // estimateNumber will be auto-generated or manually set if needed, not in form for new
   validUntilDate: z.date({ required_error: "Valid until date is required." }),
   status: z.enum(["Draft", "Sent", "Accepted", "Rejected", "Expired"]),
   lineItems: z.array(lineItemSchema).min(1, "At least one line item is required."),
@@ -116,7 +116,7 @@ const getStatusBadgeVariant = (status: EstimateStatus) => {
   }
 };
 
-const generateEstimateNumber = async (): Promise<string> => {
+export const generateEstimateNumber = async (): Promise<string> => { // Export for use in Job automation
   const prefix = "EST-";
   const datePart = format(new Date(), "yyyyMMdd");
   const estimatesRef = collection(db, "estimates");
@@ -143,13 +143,16 @@ export default function AdminEstimatesPage() {
   const [selectedEstimate, setSelectedEstimate] = useState<Estimate | null>(null);
   const [estimateToDelete, setEstimateToDelete] = useState<Estimate | null>(null);
 
+  const canManageEstimates = userProfile && ["admin", "sales"].includes(userProfile.role);
+
   useEffect(() => {
-    if (!authLoading && userProfile && !["admin", "sales"].includes(userProfile.role)) {
+    if (!authLoading && !canManageEstimates) {
       router.push("/dashboard");
     }
-  }, [userProfile, authLoading, router]);
+  }, [userProfile, authLoading, router, canManageEstimates]);
 
-  const fetchCustomers = async () => {
+  const fetchCustomers = useCallback(async () => {
+    if (!canManageEstimates) return;
     try {
       const customersCollectionRef = collection(db, "customers");
       const q = query(customersCollectionRef, orderBy("companyName", "asc"));
@@ -160,9 +163,13 @@ export default function AdminEstimatesPage() {
       console.error("Error fetching customers: ", error);
       toast({ title: "Error", description: "Failed to fetch customers.", variant: "destructive" });
     }
-  };
+  }, [toast, canManageEstimates]);
 
-  const fetchEstimates = async () => {
+  const fetchEstimates = useCallback(async () => {
+    if (!canManageEstimates) {
+        setIsLoading(false);
+        return;
+    }
     setIsLoading(true);
     try {
       const estimatesCollectionRef = collection(db, "estimates");
@@ -176,28 +183,27 @@ export default function AdminEstimatesPage() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [toast, canManageEstimates]);
 
   useEffect(() => {
-    if (userProfile && ["admin", "sales"].includes(userProfile.role)) {
+    if (canManageEstimates) {
       fetchCustomers();
       fetchEstimates();
     }
-  }, [userProfile]);
+  }, [canManageEstimates, fetchCustomers, fetchEstimates]);
 
   const form = useForm<z.infer<typeof estimateSchema>>({
     resolver: zodResolver(estimateSchema),
     defaultValues: {
       customerId: "",
-      validUntilDate: addDays(new Date(), 30), // Default to 30 days from now
+      validUntilDate: addDays(new Date(), 30), 
       status: "Draft",
-      lineItems: [{ id: crypto.randomUUID(), description: "", quantity: 1, unitPrice: 0, totalPrice: 0 }],
+      lineItems: [{ id: crypto.randomUUID(), description: "", quantity: 1, unitPrice: 0 }],
       taxRate: 0.0,
       notes: "",
     },
   });
 
-  // Manual management for lineItems array in the form
   const watchedLineItemsForm = form.watch("lineItems") || [];
   const lineItemFields = watchedLineItemsForm.map((item, index) => ({ ...item, id: item.id || crypto.randomUUID(), _formIndex: index }));
 
@@ -221,13 +227,11 @@ export default function AdminEstimatesPage() {
             ...updatedValues,
             quantity: updatedValues.quantity !== undefined ? Number(updatedValues.quantity) : Number(currentItem.quantity),
             unitPrice: updatedValues.unitPrice !== undefined ? Number(updatedValues.unitPrice) : Number(currentItem.unitPrice),
-        } as LineItem; // Cast as LineItem
-        // Recalculate totalPrice
+        } as LineItem; 
         updatedItems[index].totalPrice = (updatedItems[index].quantity || 0) * (updatedItems[index].unitPrice || 0);
         form.setValue('lineItems', updatedItems, { shouldValidate: true, shouldDirty: true });
     }
   };
-
 
   const calculateTotals = (lineItems: Omit<LineItem, 'id' | 'totalPrice'>[], taxRate: number) => {
     const subtotal = lineItems.reduce((acc, item) => acc + (item.quantity * item.unitPrice), 0);
@@ -236,7 +240,49 @@ export default function AdminEstimatesPage() {
     return { subtotal, taxAmount, totalAmount };
   };
 
+  const createJobFromEstimate = async (estimate: Estimate, estimateId: string) => {
+    if (estimate.jobCreated) {
+      toast({ title: "Info", description: "Job already created for this estimate.", variant: "default"});
+      return;
+    }
+    try {
+      const jobNumber = await generateJobNumber();
+      const jobDescription = estimate.notes || estimate.lineItems.map(li => li.description).join(', ') || `Job related to estimate ${estimate.estimateNumber}`;
+      
+      const newJobData = {
+        jobNumber,
+        customerId: estimate.customerId,
+        customerName: estimate.customerName,
+        customerEmail: estimate.customerEmail || undefined,
+        description: jobDescription,
+        status: "Pending Schedule" as JobStatus,
+        dateCreated: serverTimestamp(),
+        scheduledDate: null,
+        completionDate: null,
+        notes: `Originating from estimate: ${estimate.estimateNumber}`,
+        internalNotes: `Automatically created from accepted estimate ${estimate.estimateNumber}.`,
+        lastUpdated: serverTimestamp(),
+        estimateId: estimateId,
+        assignedTechnicianId: null,
+        technicianName: null,
+      };
+      await addDoc(collection(db, "jobs"), newJobData);
+      
+      // Mark job as created on the estimate
+      const estimateDocRef = doc(db, "estimates", estimateId);
+      await updateDoc(estimateDocRef, { jobCreated: true, lastUpdated: serverTimestamp() });
+
+      toast({ title: "Job Created", description: `Job ${jobNumber} automatically created from estimate ${estimate.estimateNumber}.` });
+      fetchEstimates(); // Refresh estimates to show jobCreated status
+    } catch (error) {
+      console.error("Error creating job from estimate: ", error);
+      toast({ title: "Job Creation Error", description: "Failed to automatically create job.", variant: "destructive" });
+    }
+  };
+
+
   async function onSubmit(values: z.infer<typeof estimateSchema>) {
+    if (!canManageEstimates) return;
     setIsSubmitting(true);
     try {
       const selectedCustomerDoc = customers.find(c => c.id === values.customerId);
@@ -256,7 +302,7 @@ export default function AdminEstimatesPage() {
       
       const totals = calculateTotals(validLineItems, Number(values.taxRate));
       
-      const estimateDataForDb = {
+      const estimateDataForDb: Omit<Estimate, 'id' | 'estimateNumber' | 'dateCreated' | 'lastUpdated' | 'jobCreated'> & { lastUpdated?: Timestamp, dateCreated?: Timestamp, jobCreated?: boolean } = {
         customerId: selectedCustomerDoc.id,
         customerName: selectedCustomerDoc.companyName,
         customerEmail: selectedCustomerDoc.email || undefined,
@@ -270,22 +316,44 @@ export default function AdminEstimatesPage() {
         notes: values.notes || null,
       };
 
+      let savedEstimateId = selectedEstimate?.id;
+      let finalEstimateData: Estimate;
 
       if (selectedEstimate) { // Editing
         const estimateDocRef = doc(db, "estimates", selectedEstimate.id);
         await updateDoc(estimateDocRef, { ...estimateDataForDb, lastUpdated: serverTimestamp() as Timestamp }); 
         toast({ title: "Estimate Updated", description: `Estimate ${selectedEstimate.estimateNumber} has been updated.` });
+        finalEstimateData = { ...selectedEstimate, ...estimateDataForDb, status: values.status, lastUpdated: Timestamp.now() };
       } else { // Adding
         const estimateNumber = await generateEstimateNumber();
-        const newEstimateData = {
+        const newEstimateDataWithTimestamps = {
             ...estimateDataForDb,
             estimateNumber,
             dateCreated: serverTimestamp() as Timestamp,
             lastUpdated: serverTimestamp() as Timestamp,
+            jobCreated: false,
         }
-        const estimatesCollectionRef = collection(db, "estimates");
-        await addDoc(estimatesCollectionRef, newEstimateData);
+        const docRef = await addDoc(collection(db, "estimates"), newEstimateDataWithTimestamps);
+        savedEstimateId = docRef.id;
         toast({ title: "Estimate Created", description: `Estimate ${estimateNumber} has been created.` });
+        // For automation, construct what the saved estimate would look like
+        finalEstimateData = { 
+            ...newEstimateDataWithTimestamps, 
+            id: docRef.id, 
+            dateCreated: Timestamp.now(), // Approximate for immediate use
+            lastUpdated: Timestamp.now(), // Approximate for immediate use
+        } as Estimate;
+      }
+      
+      // Automation: Create job if status is "Accepted"
+      if (values.status === "Accepted" && savedEstimateId) {
+        const estimateToCreateJobFrom = selectedEstimate ? 
+          { ...selectedEstimate, ...estimateDataForDb, status: values.status, lastUpdated: Timestamp.now() } : 
+          finalEstimateData;
+        
+        if (!estimateToCreateJobFrom.jobCreated) {
+             await createJobFromEstimate(estimateToCreateJobFrom, savedEstimateId);
+        }
       }
       
       form.reset();
@@ -301,6 +369,7 @@ export default function AdminEstimatesPage() {
   }
   
   const handleOpenFormDialog = (estimateToEdit?: Estimate) => {
+    if (!canManageEstimates) return;
     setSelectedEstimate(estimateToEdit || null);
     if (estimateToEdit) {
       form.reset({
@@ -312,14 +381,7 @@ export default function AdminEstimatesPage() {
         notes: estimateToEdit.notes || "",
       });
     } else {
-      form.reset({ 
-        customerId: "",
-        validUntilDate: addDays(new Date(), 30),
-        status: "Draft",
-        lineItems: [{ id: crypto.randomUUID(), description: "", quantity: 1, unitPrice: 0, totalPrice: 0 }],
-        taxRate: 0.0,
-        notes: "",
-      });
+      form.reset(); 
     }
     setIsFormDialogOpen(true);
   };
@@ -330,11 +392,12 @@ export default function AdminEstimatesPage() {
   };
 
   const handleDeleteEstimate = (estimate: Estimate) => {
+     if (!canManageEstimates) return;
     setEstimateToDelete(estimate);
   };
 
   async function confirmDeleteEstimate() {
-    if (!estimateToDelete) return;
+    if (!estimateToDelete || !canManageEstimates) return;
     setIsSubmitting(true);
     try {
       const estimateDocRef = doc(db, "estimates", estimateToDelete.id);
@@ -369,7 +432,7 @@ export default function AdminEstimatesPage() {
   if (authLoading || !userProfile) {
     return <div className="flex h-screen items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="ml-2">Loading...</p></div>;
   }
-  if (!["admin", "sales"].includes(userProfile.role)) {
+  if (!canManageEstimates) {
     return <div className="flex h-screen items-center justify-center"><p>Access Denied.</p></div>;
   }
 
@@ -500,7 +563,7 @@ export default function AdminEstimatesPage() {
                   <FormItem> <FormLabel>Tax Rate (e.g., 0.08 for 8%)</FormLabel>
                     <div className="relative">
                         <Percent className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <FormControl><Input type="number" step="0.001" placeholder="0.00" {...field} onChange={e => field.onChange(parseFloat(e.target.value) || 0)} /></FormControl>
+                        <FormControl><Input type="number" step="0.001" placeholder="0.00" {...field} onChange={e => field.onChange(parseFloat(e.target.value) || 0)} className="pl-10" /></FormControl>
                     </div>
                     <FormMessage />
                   </FormItem>
@@ -544,6 +607,7 @@ export default function AdminEstimatesPage() {
                 <strong className="text-muted-foreground">Status:</strong><p className="col-span-2"><Badge variant={getStatusBadgeVariant(selectedEstimate.status)}>{selectedEstimate.status}</Badge></p>
                 <strong className="text-muted-foreground">Date Created:</strong><p className="col-span-2">{selectedEstimate.dateCreated ? format(selectedEstimate.dateCreated.toDate(), "PP") : 'N/A'}</p>
                 <strong className="text-muted-foreground">Valid Until:</strong><p className="col-span-2">{selectedEstimate.validUntil ? format(selectedEstimate.validUntil.toDate(), "PP") : 'N/A'}</p>
+                 {selectedEstimate.jobCreated && <><strong className="text-muted-foreground">Job Created:</strong><p className="col-span-2 text-green-600">Yes</p></>}
               </div>
               
               <div className="mt-4">
@@ -576,7 +640,7 @@ export default function AdminEstimatesPage() {
           )}
           <DialogFooter className="pt-4">
             <Button variant="outline" onClick={() => setIsViewDialogOpen(false)}>Close</Button>
-            <Button onClick={() => { if(selectedEstimate) { setIsViewDialogOpen(false); handleOpenFormDialog(selectedEstimate); } }}>
+            <Button onClick={() => { if(selectedEstimate) { setIsViewDialogOpen(false); handleOpenFormDialog(selectedEstimate); } }} disabled={selectedEstimate?.status === 'Accepted' && selectedEstimate?.jobCreated}>
                 <Edit className="mr-2 h-4 w-4" /> Edit Estimate
             </Button>
           </DialogFooter>
@@ -650,8 +714,8 @@ export default function AdminEstimatesPage() {
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm text-right space-x-2">
                         <Button variant="outline" size="sm" onClick={() => handleViewEstimate(estimate)}><Eye className="mr-1 h-3 w-3" /> View</Button>
-                        <Button variant="outline" size="sm" onClick={() => handleOpenFormDialog(estimate)}><Edit className="mr-1 h-3 w-3" /> Edit</Button>
-                        <Button variant="destructive" size="sm" onClick={() => handleDeleteEstimate(estimate)}><Trash2 className="mr-1 h-3 w-3" /> Delete</Button>
+                        <Button variant="outline" size="sm" onClick={() => handleOpenFormDialog(estimate)} disabled={estimate.status === 'Accepted' && estimate.jobCreated}><Edit className="mr-1 h-3 w-3" /> Edit</Button>
+                        <Button variant="destructive" size="sm" onClick={() => handleDeleteEstimate(estimate)} disabled={estimate.status === 'Accepted' && estimate.jobCreated}><Trash2 className="mr-1 h-3 w-3" /> Delete</Button>
                       </td>
                     </tr>
                   ))}
@@ -671,3 +735,4 @@ export default function AdminEstimatesPage() {
   );
 }
 
+    
