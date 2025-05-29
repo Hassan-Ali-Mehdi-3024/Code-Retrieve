@@ -1,6 +1,7 @@
 
 "use client";
 
+import React from "react"; // Added React import
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -198,7 +199,7 @@ export default function AdminEstimatesPage() {
         const items = form.watch('lineItems');
         return {
             fields: items.map((item, index) => ({ ...item, id: item.id || crypto.randomUUID(), _formIndex: index })),
-            append: (item: Omit<LineItem, 'totalPrice'>) => {
+            append: (item: Omit<LineItem, 'totalPrice' | 'id'>) => { // id is generated, totalPrice calculated
                 const currentItems = form.getValues('lineItems');
                 form.setValue('lineItems', [...currentItems, { ...item, id: crypto.randomUUID(), totalPrice: item.quantity * item.unitPrice }]);
             },
@@ -206,14 +207,17 @@ export default function AdminEstimatesPage() {
                 const currentItems = form.getValues('lineItems');
                 form.setValue('lineItems', currentItems.filter((_, i) => i !== index));
             },
-            update: (index: number, item: Partial<LineItem>) => {
+            update: (index: number, item: Partial<Omit<LineItem, 'id'>>) => { // id should not be updated this way
                  const currentItems = form.getValues('lineItems');
                  const updatedItems = [...currentItems];
-                 updatedItems[index] = { ...updatedItems[index], ...item } as LineItem;
-                 if(item.quantity !== undefined || item.unitPrice !== undefined){
-                    updatedItems[index].totalPrice = (item.quantity ?? updatedItems[index].quantity) * (item.unitPrice ?? updatedItems[index].unitPrice);
+                 // Ensure the item at the index exists
+                 if (updatedItems[index]) {
+                    updatedItems[index] = { ...updatedItems[index], ...item } as LineItem;
+                    if(item.quantity !== undefined || item.unitPrice !== undefined){
+                        updatedItems[index].totalPrice = (item.quantity ?? updatedItems[index].quantity) * (item.unitPrice ?? updatedItems[index].unitPrice);
+                    }
+                    form.setValue('lineItems', updatedItems);
                  }
-                 form.setValue('lineItems', updatedItems);
             }
         };
     })()
@@ -238,14 +242,12 @@ export default function AdminEstimatesPage() {
       }
 
       const totals = calculateTotals(values.lineItems, values.taxRate);
-      const estimateNumber = await generateEstimateNumber();
+      
 
-      const newEstimateData: Omit<Estimate, 'id'> = {
-        estimateNumber,
+      const estimateDataForDb: Omit<Estimate, 'id' | 'estimateNumber' | 'dateCreated' | 'lastUpdated'> & { dateCreated?: Timestamp, lastUpdated?: Timestamp, estimateNumber?: string } = {
         customerId: selectedCustomer.id,
         customerName: selectedCustomer.companyName,
         customerEmail: selectedCustomer.email,
-        dateCreated: serverTimestamp() as Timestamp,
         validUntil: Timestamp.fromDate(values.validUntilDate),
         status: values.status,
         lineItems: values.lineItems.map(li => ({...li, id: li.id || crypto.randomUUID(), totalPrice: li.quantity * li.unitPrice })),
@@ -254,16 +256,22 @@ export default function AdminEstimatesPage() {
         taxAmount: totals.taxAmount,
         totalAmount: totals.totalAmount,
         notes: values.notes || null,
-        lastUpdated: serverTimestamp() as Timestamp,
       };
 
-      const estimatesCollectionRef = collection(db, "estimates");
+
       if (selectedEstimate) { // Editing
         const estimateDocRef = doc(db, "estimates", selectedEstimate.id);
-        // For estimateNumber, do not change if editing, or handle differently
-        await updateDoc(estimateDocRef, { ...newEstimateData, estimateNumber: selectedEstimate.estimateNumber, dateCreated: selectedEstimate.dateCreated }); 
+        await updateDoc(estimateDocRef, { ...estimateDataForDb, lastUpdated: serverTimestamp() as Timestamp }); 
         toast({ title: "Estimate Updated", description: `Estimate ${selectedEstimate.estimateNumber} has been updated.` });
       } else { // Adding
+        const estimateNumber = await generateEstimateNumber();
+        const newEstimateData = {
+            ...estimateDataForDb,
+            estimateNumber,
+            dateCreated: serverTimestamp() as Timestamp,
+            lastUpdated: serverTimestamp() as Timestamp,
+        }
+        const estimatesCollectionRef = collection(db, "estimates");
         await addDoc(estimatesCollectionRef, newEstimateData);
         toast({ title: "Estimate Created", description: `Estimate ${estimateNumber} has been created.` });
       }
@@ -292,7 +300,14 @@ export default function AdminEstimatesPage() {
         notes: estimateToEdit.notes || "",
       });
     } else {
-      form.reset(); // Reset to default values for new estimate
+      form.reset({ // Reset to default values for new estimate, including generating new UUIDs for line items
+        customerId: "",
+        validUntilDate: addDays(new Date(), 30),
+        status: "Draft",
+        lineItems: [{ id: crypto.randomUUID(), description: "", quantity: 1, unitPrice: 0, totalPrice: 0 }],
+        taxRate: 0.0,
+        notes: "",
+      });
     }
     setIsFormDialogOpen(true);
   };
@@ -370,7 +385,7 @@ export default function AdminEstimatesPage() {
                       <PopoverContent className="w-[--radix-popover-trigger-width] max-h-[300px] overflow-y-auto p-0">
                         {/* Basic search can be added here if needed, for now direct select */}
                         {customers.map(customer => (
-                          <div key={customer.id} onClick={() => {form.setValue("customerId", customer.id);}}
+                          <div key={customer.id} onClick={() => {form.setValue("customerId", customer.id); (document.activeElement as HTMLElement)?.blur(); }}
                                className="cursor-pointer p-2 hover:bg-accent hover:text-accent-foreground">
                             {customer.companyName} ({customer.contactName})
                           </div>
@@ -397,7 +412,7 @@ export default function AdminEstimatesPage() {
                         </FormControl>
                       </PopoverTrigger>
                       <PopoverContent className="w-auto p-0" align="start">
-                        <Calendar mode="single" selected={field.value} onSelect={field.onChange} initialFocus />
+                        <Calendar mode="single" selected={field.value} onSelect={(date) => {field.onChange(date); (document.activeElement as HTMLElement)?.blur();}} initialFocus />
                       </PopoverContent>
                     </Popover>
                     <FormMessage />
@@ -405,7 +420,7 @@ export default function AdminEstimatesPage() {
                 )} />
                  <FormField control={form.control} name="status" render={({ field }) => (
                     <FormItem> <FormLabel>Status</FormLabel> 
-                        <select onChange={field.onChange} defaultValue={field.value} className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
+                        <select onChange={field.onChange} value={field.value} className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
                             {(["Draft", "Sent", "Accepted", "Rejected", "Expired"] as EstimateStatus[]).map(s => <option key={s} value={s}>{s}</option>)}
                         </select>
                     <FormMessage /> </FormItem>
@@ -441,7 +456,7 @@ export default function AdminEstimatesPage() {
                       )} />
                       <div className="col-span-2 flex items-center">
                         <p className="text-sm font-medium w-full text-right pr-1">
-                          {(Number(item.quantity) * Number(item.unitPrice)).toFixed(2)}
+                          {((Number(item.quantity) || 0) * (Number(item.unitPrice) || 0)).toFixed(2)}
                         </p>
                       </div>
                       <div className="col-span-1 flex items-center">
@@ -467,7 +482,7 @@ export default function AdminEstimatesPage() {
                   <FormItem> <FormLabel>Tax Rate (e.g., 0.08 for 8%)</FormLabel>
                     <div className="relative">
                         <Percent className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <FormControl><Input type="number" step="0.001" placeholder="0.00" {...field} className="pl-10" /></FormControl>
+                        <FormControl><Input type="number" step="0.001" placeholder="0.00" {...field} /></FormControl>
                     </div>
                     <FormMessage />
                   </FormItem>
@@ -510,8 +525,8 @@ export default function AdminEstimatesPage() {
             <div className="space-y-4 py-2 max-h-[70vh] overflow-y-auto pr-2 text-sm">
               <div className="grid grid-cols-3 gap-x-4 gap-y-1">
                 <strong className="text-muted-foreground">Status:</strong><p className="col-span-2"><Badge variant={getStatusBadgeVariant(selectedEstimate.status)}>{selectedEstimate.status}</Badge></p>
-                <strong className="text-muted-foreground">Date Created:</strong><p className="col-span-2">{format(selectedEstimate.dateCreated.toDate(), "PP")}</p>
-                <strong className="text-muted-foreground">Valid Until:</strong><p className="col-span-2">{format(selectedEstimate.validUntil.toDate(), "PP")}</p>
+                <strong className="text-muted-foreground">Date Created:</strong><p className="col-span-2">{selectedEstimate.dateCreated ? format(selectedEstimate.dateCreated.toDate(), "PP") : 'N/A'}</p>
+                <strong className="text-muted-foreground">Valid Until:</strong><p className="col-span-2">{selectedEstimate.validUntil ? format(selectedEstimate.validUntil.toDate(), "PP") : 'N/A'}</p>
               </div>
               
               <div className="mt-4">
@@ -612,7 +627,7 @@ export default function AdminEstimatesPage() {
                     <tr key={estimate.id} className="hover:bg-muted/30 transition-colors">
                       <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-primary">{estimate.estimateNumber}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm">{estimate.customerName}</td>
-                      <td className="px-4 py-3 whitespace-nowrap text-sm text-muted-foreground">{format(estimate.dateCreated.toDate(), "PP")}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-sm text-muted-foreground">{estimate.dateCreated ? format(estimate.dateCreated.toDate(), "PP") : 'N/A'}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm font-medium">${estimate.totalAmount.toFixed(2)}</td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <Badge variant={getStatusBadgeVariant(estimate.status)}>{estimate.status}</Badge>
@@ -640,5 +655,3 @@ export default function AdminEstimatesPage() {
   );
 }
 
-
-    
