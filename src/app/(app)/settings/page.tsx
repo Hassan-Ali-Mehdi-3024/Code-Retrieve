@@ -8,24 +8,23 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { User, Shield, Edit3, KeyRound, Loader2 } from "lucide-react";
+import { User, Shield, Edit3, KeyRound, Loader2, Settings as SettingsIcon } from "lucide-react";
 import { useForm } from "react-hook-form";
 import * as z from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useToast } from "@/hooks/use-toast";
 import { useState } from "react";
-// import { updateProfile } from "firebase/auth"; // For updating Firebase Auth profile
-// import { doc, updateDoc } from "firebase/firestore"; // For updating Firestore profile
-// import { db, auth } from "@/lib/firebase/config";
+import { updateProfile, EmailAuthProvider, reauthenticateWithCredential, updatePassword } from "firebase/auth";
+import { doc, updateDoc } from "firebase/firestore";
+import { db, auth } from "@/lib/firebase/config";
 
-// Placeholder schemas and functions for now
 const profileSchema = z.object({
   displayName: z.string().min(2, "Display name must be at least 2 characters."),
-  email: z.string().email().optional(), // Email might be read-only
+  email: z.string().email().optional(), 
 });
 
 const passwordSchema = z.object({
-  currentPassword: z.string().min(6, "Current password is required."),
+  currentPassword: z.string().min(1, "Current password is required."), // Changed min to 1 as Firebase handles length
   newPassword: z.string().min(6, "New password must be at least 6 characters."),
   confirmPassword: z.string().min(6, "Confirm password is required."),
 }).refine(data => data.newPassword === data.confirmPassword, {
@@ -35,7 +34,7 @@ const passwordSchema = z.object({
 
 
 export default function SettingsPage() {
-  const { userProfile, user } = useAuth();
+  const { userProfile, user, loading: authLoading, setUserProfile: setAuthContextProfile } = useAuth(); // Assuming setUserProfile is added to context
   const { toast } = useToast();
   const [isProfileSubmitting, setIsProfileSubmitting] = useState(false);
   const [isPasswordSubmitting, setIsPasswordSubmitting] = useState(false);
@@ -48,6 +47,17 @@ export default function SettingsPage() {
     },
   });
 
+  // Update form default values if userProfile changes after initial load
+  useState(() => {
+    if (userProfile) {
+        profileForm.reset({
+            displayName: userProfile.displayName || "",
+            email: userProfile.email || "",
+        });
+    }
+  }, [userProfile, profileForm]);
+
+
   const passwordForm = useForm<z.infer<typeof passwordSchema>>({
     resolver: zodResolver(passwordSchema),
     defaultValues: {
@@ -58,25 +68,78 @@ export default function SettingsPage() {
   });
 
   async function onProfileSubmit(values: z.infer<typeof profileSchema>) {
+    if (!user || !userProfile) {
+        toast({ title: "Error", description: "User not found. Please re-login.", variant: "destructive"});
+        return;
+    }
     setIsProfileSubmitting(true);
-    toast({ title: "Profile Update", description: "Profile update functionality to be implemented." });
-    console.log("Profile update values:", values);
-    // TODO: Implement actual profile update logic here
-    // 1. Update Firebase Auth display name: await updateProfile(auth.currentUser, { displayName: values.displayName });
-    // 2. Update Firestore user document: await updateDoc(doc(db, "users", user.uid), { displayName: values.displayName });
-    // 3. Potentially re-fetch userProfile or update context
-    setIsProfileSubmitting(false);
+    try {
+      // Update Firebase Auth display name
+      if (auth.currentUser) { // Ensure currentUser is not null
+        await updateProfile(auth.currentUser, { displayName: values.displayName });
+      } else {
+        throw new Error("Firebase Auth current user not available.");
+      }
+
+      // Update Firestore user document
+      const userDocRef = doc(db, "users", user.uid);
+      await updateDoc(userDocRef, { displayName: values.displayName });
+      
+      // Optionally, update context state if your context provides a setter
+      // For example: setAuthContextProfile({ ...userProfile, displayName: values.displayName });
+      // This depends on AuthContext implementation. For now, a page refresh would show changes.
+
+      toast({
+        title: "Profile Updated",
+        description: "Your display name has been successfully updated.",
+      });
+    } catch (error: any) {
+      console.error("Error updating profile:", error);
+      toast({
+        title: "Profile Update Failed",
+        description: error.message || "Could not update your profile. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsProfileSubmitting(false);
+    }
   }
 
   async function onPasswordSubmit(values: z.infer<typeof passwordSchema>) {
+    if (!user || !user.email) { // Check for user.email as it's needed for credential
+        toast({ title: "Error", description: "User or user email not found. Please re-login.", variant: "destructive"});
+        return;
+    }
     setIsPasswordSubmitting(true);
-    toast({ title: "Password Change", description: "Password change functionality to be implemented." });
-    console.log("Password change values:", values);
-    // TODO: Implement actual password change logic here
-    // 1. Re-authenticate user: const credential = EmailAuthProvider.credential(user.email, values.currentPassword); await reauthenticateWithCredential(user, credential);
-    // 2. Update password: await updatePassword(user, values.newPassword);
-    setIsPasswordSubmitting(false);
-    passwordForm.reset();
+    try {
+      // Re-authenticate user
+      const credential = EmailAuthProvider.credential(user.email, values.currentPassword);
+      await reauthenticateWithCredential(user, credential);
+
+      // Update password
+      await updatePassword(user, values.newPassword);
+
+      toast({
+        title: "Password Changed",
+        description: "Your password has been successfully updated.",
+      });
+      passwordForm.reset();
+    } catch (error: any) {
+      console.error("Error changing password:", error);
+      let errorMessage = "Could not change your password. Please try again.";
+      if (error.code === 'auth/wrong-password') {
+        errorMessage = "Incorrect current password. Please try again.";
+      } else if (error.code === 'auth/too-many-requests') {
+        errorMessage = "Too many attempts. Please try again later.";
+      }
+      toast({
+        title: "Password Change Failed",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    } finally {
+      setIsPasswordSubmitting(false);
+    }
   }
   
   const getInitials = (name: string | null | undefined) => {
@@ -86,7 +149,7 @@ export default function SettingsPage() {
     return (names[0][0]?.toUpperCase() || "") + (names[names.length - 1][0]?.toUpperCase() || "");
   };
 
-  if (!userProfile || !user) {
+  if (authLoading || !userProfile || !user) {
     return (
         <div className="flex h-screen items-center justify-center">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -119,7 +182,7 @@ export default function SettingsPage() {
         <CardContent className="space-y-6">
           <div className="flex items-center space-x-4">
             <Avatar className="h-20 w-20">
-              <AvatarImage src={userProfile.photoURL || undefined} alt={userProfile.displayName || "User"} data-ai-hint="user avatar" />
+              <AvatarImage src={userProfile.photoURL || undefined} alt={userProfile.displayName || "User"} data-ai-hint="user avatar"/>
               <AvatarFallback className="text-2xl">{getInitials(userProfile.displayName)}</AvatarFallback>
             </Avatar>
             <div>
@@ -162,7 +225,7 @@ export default function SettingsPage() {
                     className="bg-muted/50 capitalize"
                 />
             </div>
-            <Button type="submit" disabled={isProfileSubmitting}>
+            <Button type="submit" disabled={isProfileSubmitting || profileForm.formState.isSubmitting}>
               {isProfileSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Edit3 className="mr-2 h-4 w-4" />}
               Save Profile Changes
             </Button>
@@ -225,7 +288,7 @@ export default function SettingsPage() {
                 </div>
                 {passwordForm.formState.errors.confirmPassword && <p className="text-sm text-destructive">{passwordForm.formState.errors.confirmPassword.message}</p>}
             </div>
-            <Button type="submit" disabled={isPasswordSubmitting}>
+            <Button type="submit" disabled={isPasswordSubmitting || passwordForm.formState.isSubmitting}>
                 {isPasswordSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <KeyRound className="mr-2 h-4 w-4" />}
                 Change Password
             </Button>
@@ -237,7 +300,7 @@ export default function SettingsPage() {
         <Card className="shadow-md">
             <CardHeader>
             <CardTitle className="flex items-center text-xl">
-                <Settings className="mr-3 h-6 w-6 text-primary" />
+                <SettingsIcon className="mr-3 h-6 w-6 text-primary" />
                 System Settings (Admin)
             </CardTitle>
             <CardDescription>
@@ -255,4 +318,3 @@ export default function SettingsPage() {
   );
 }
 
-    
