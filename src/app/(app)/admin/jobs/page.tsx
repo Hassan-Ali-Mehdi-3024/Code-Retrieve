@@ -50,8 +50,8 @@ import { db } from "@/lib/firebase/config";
 import { collection, addDoc, getDocs, Timestamp, query, orderBy, doc, updateDoc, deleteDoc, serverTimestamp, where, getDoc } from "firebase/firestore"; // Added getDoc
 import { format, addDays } from "date-fns";
 import type { UserProfile } from "@/types";
-import type { Estimate } from "../estimates/page"; 
-import { generateInvoiceNumber, type InvoiceStatus, type InvoiceLineItem } from "../invoices/page"; 
+import type { Estimate } from "../estimates/page";
+import { generateInvoiceNumber, type InvoiceStatus, type InvoiceLineItem } from "../invoices/page";
 
 interface Customer {
   id: string;
@@ -72,10 +72,10 @@ interface Job {
   id: string;
   jobNumber: string;
   customerId: string;
-  customerName: string; 
-  customerEmail?: string; 
+  customerName: string;
+  customerEmail?: string;
   assignedTechnicianId?: string | null;
-  technicianName?: string | null; 
+  technicianName?: string | null;
   description: string;
   status: JobStatus;
   dateCreated: Timestamp;
@@ -84,7 +84,7 @@ interface Job {
   notes?: string | null;
   internalNotes?: string | null;
   lastUpdated?: Timestamp;
-  estimateId?: string | null; 
+  estimateId?: string | null;
   invoiceCreated?: boolean; // To track if an invoice has been created
 }
 
@@ -102,7 +102,7 @@ const jobSchema = z.object({
 
 const technicianJobUpdateSchema = z.object({
     status: z.enum(ALL_JOB_STATUSES),
-    notes: z.string().optional().nullable(), 
+    notes: z.string().optional().nullable(),
 });
 
 
@@ -111,16 +111,16 @@ const getStatusBadgeVariant = (status: JobStatus) => {
     case "Pending Schedule": return "secondary";
     case "Scheduled": return "default";
     case "Dispatched": return "outline";
-    case "In Progress": return "default"; 
+    case "In Progress": return "default";
     case "On Hold": return "secondary";
-    case "Completed": return "outline"; 
+    case "Completed": return "outline";
     case "Cancelled": return "destructive";
-    case "Requires Follow-up": return "destructive"; 
+    case "Requires Follow-up": return "destructive";
     default: return "default";
   }
 };
 
-export const generateJobNumber = async (): Promise<string> => { 
+export const generateJobNumber = async (): Promise<string> => {
   const prefix = "JOB-";
   const datePart = format(new Date(), "yyyyMMdd");
   const jobsRef = collection(db, "jobs");
@@ -128,7 +128,7 @@ export const generateJobNumber = async (): Promise<string> => {
   const q = query(jobsRef, where("dateCreated", ">=", todayStart));
 
   const snapshot = await getDocs(q);
-  const count = snapshot.size + 1; 
+  const count = snapshot.size + 1;
   return `${prefix}${datePart}-${String(count).padStart(3, '0')}`;
 };
 
@@ -142,7 +142,7 @@ export default function AdminJobsPage() {
   const [technicians, setTechnicians] = useState<Technician[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
+
   const [isFormDialogOpen, setIsFormDialogOpen] = useState(false);
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
@@ -183,7 +183,7 @@ export default function AdminJobsPage() {
       // Fetch all users and filter/sort client-side to avoid composite index errors if not set up.
       // FOR PERFORMANCE: Create a composite index in Firestore: collection 'users', fields 'role' (asc) and 'displayName' (asc).
       const querySnapshot = await getDocs(usersCollectionRef);
-      const fetchedUsers = querySnapshot.docs.map(doc => ({ id: doc.id, uid: doc.id, ...doc.data() } as UserProfile));
+      let fetchedUsers = querySnapshot.docs.map(doc => ({ id: doc.id, uid: doc.id, ...doc.data() } as UserProfile));
       
       const fetchedTechnicians = fetchedUsers
         .filter(user => user.role === "technician")
@@ -195,9 +195,9 @@ export default function AdminJobsPage() {
       toast({ title: "Error", description: "Failed to fetch technicians.", variant: "destructive" });
     }
   }, [toast, userProfile]);
-  
+
   const fetchJobs = useCallback(async () => {
-    if (!userProfile) return; 
+    if (!userProfile) return;
 
     setIsLoading(true);
     try {
@@ -207,15 +207,39 @@ export default function AdminJobsPage() {
       if (userProfile.role === 'admin') {
         q = query(jobsCollectionRef, orderBy("dateCreated", "desc"));
       } else if (userProfile.role === 'technician') {
-        q = query(jobsCollectionRef, where("assignedTechnicianId", "==", userProfile.uid), orderBy("scheduledDate", "desc"), orderBy("dateCreated", "desc"));
+        // Query only by assignedTechnicianId to avoid complex index requirements for now.
+        // Sorting will be done client-side.
+        // RECOMMENDED: Create a composite index in Firestore for jobs:
+        // assignedTechnicianId (ASC), scheduledDate (DESC), dateCreated (DESC) for optimal performance.
+        q = query(jobsCollectionRef, where("assignedTechnicianId", "==", userProfile.uid));
       } else {
-        setJobs([]); 
+        setJobs([]);
         setIsLoading(false);
         return;
       }
-      
+
       const querySnapshot = await getDocs(q);
-      const fetchedJobs = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Job));
+      let fetchedJobs = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Job));
+
+      // Client-side sorting for technicians if composite index for sorting is not available
+      if (userProfile.role === 'technician') {
+        fetchedJobs.sort((a, b) => {
+          // Sort by scheduledDate (descending, nulls last)
+          if (a.scheduledDate && b.scheduledDate) {
+            if (b.scheduledDate.toMillis() !== a.scheduledDate.toMillis()) {
+              return b.scheduledDate.toMillis() - a.scheduledDate.toMillis();
+            }
+          } else if (a.scheduledDate) {
+            return -1; // a comes first (b is null)
+          } else if (b.scheduledDate) {
+            return 1;  // b comes first (a is null)
+          }
+
+          // Then sort by dateCreated (descending)
+          return b.dateCreated.toMillis() - a.dateCreated.toMillis();
+        });
+      }
+
       setJobs(fetchedJobs);
     } catch (error) {
       console.error("Error fetching jobs: ", error);
@@ -272,27 +296,27 @@ export default function AdminJobsPage() {
             const estimateDocSnap = await getDoc(doc(db, "estimates", job.estimateId));
             if (estimateDocSnap.exists()) {
                 const estimateData = estimateDocSnap.data() as Estimate;
-                lineItems = estimateData.lineItems.map(li => ({ 
-                    id: crypto.randomUUID(), 
+                lineItems = estimateData.lineItems.map(li => ({
+                    id: crypto.randomUUID(),
                     description: li.description,
                     quantity: li.quantity,
                     unitPrice: li.unitPrice,
                     totalPrice: li.totalPrice,
                 }));
-                taxRate = estimateData.taxRate; 
+                taxRate = estimateData.taxRate;
             }
         }
 
         if (lineItems.length === 0) {
-            lineItems.push({ 
-                id: crypto.randomUUID(), 
-                description: job.description || `Services for job ${job.jobNumber}`, 
-                quantity: 1, 
-                unitPrice: 0, 
-                totalPrice: 0  
+            lineItems.push({
+                id: crypto.randomUUID(),
+                description: job.description || `Services for job ${job.jobNumber}`,
+                quantity: 1,
+                unitPrice: 0,
+                totalPrice: 0
             });
         }
-        
+
         const subtotal = lineItems.reduce((acc, item) => acc + item.totalPrice, 0);
         const taxAmount = subtotal * taxRate;
         const totalAmount = subtotal + taxAmount;
@@ -305,7 +329,7 @@ export default function AdminJobsPage() {
             jobId: jobId,
             estimateId: job.estimateId || null,
             dateCreated: serverTimestamp(),
-            dueDate: Timestamp.fromDate(addDays(new Date(), 30)), 
+            dueDate: Timestamp.fromDate(addDays(new Date(), 30)),
             lineItems,
             subtotal,
             taxRate,
@@ -319,16 +343,16 @@ export default function AdminJobsPage() {
         };
 
         await addDoc(collection(db, "invoices"), newInvoiceData);
-        
+
         const jobDocRef = doc(db, "jobs", jobId);
         await updateDoc(jobDocRef, { invoiceCreated: true, lastUpdated: serverTimestamp() });
 
-        toast({ 
-            title: "Invoice Created", 
+        toast({
+            title: "Invoice Created",
             description: `Invoice ${invoiceNumber} automatically created for job ${job.jobNumber}. Please review and edit the invoice if necessary, especially line items and pricing.`,
-            duration: 7000, 
+            duration: 7000,
         });
-        fetchJobs(); 
+        fetchJobs();
     } catch (error) {
         console.error("Error creating invoice from job: ", error);
         toast({ title: "Invoice Creation Error", description: "Failed to automatically create invoice.", variant: "destructive" });
@@ -369,13 +393,13 @@ export default function AdminJobsPage() {
         estimateId: values.estimateId || null,
       };
 
-      if (selectedJob) { 
+      if (selectedJob) {
         const jobDocRef = doc(db, "jobs", selectedJob.id);
-        await updateDoc(jobDocRef, {...jobDataForDb, lastUpdated: serverTimestamp() as Timestamp}); 
+        await updateDoc(jobDocRef, {...jobDataForDb, lastUpdated: serverTimestamp() as Timestamp});
         toast({ title: "Job Updated", description: `Job ${selectedJob.jobNumber} has been updated.` });
         finalJobData = { ...selectedJob, ...jobDataForDb, status: values.status, lastUpdated: Timestamp.now() };
 
-      } else { 
+      } else {
         const jobNumber = await generateJobNumber();
         const newJobDataWithTimestamps = {
             ...jobDataForDb,
@@ -387,20 +411,20 @@ export default function AdminJobsPage() {
         const docRef = await addDoc(collection(db, "jobs"), newJobDataWithTimestamps);
         jobIdToUpdate = docRef.id;
         toast({ title: "Job Created", description: `Job ${jobNumber} has been created.` });
-        finalJobData = { 
-            ...newJobDataWithTimestamps, 
-            id: docRef.id, 
-            dateCreated: Timestamp.now(), 
-            lastUpdated: Timestamp.now(), 
+        finalJobData = {
+            ...newJobDataWithTimestamps,
+            id: docRef.id,
+            dateCreated: Timestamp.now(),
+            lastUpdated: Timestamp.now(),
         } as Job;
       }
-      
+
       if (values.status === "Completed" && jobIdToUpdate && (!selectedJob || selectedJob.status !== "Completed")) {
          if (!finalJobData.invoiceCreated) {
             await createInvoiceFromJob(finalJobData, jobIdToUpdate);
          }
       }
-      
+
       adminForm.reset();
       setIsFormDialogOpen(false);
       setSelectedJob(null);
@@ -412,9 +436,9 @@ export default function AdminJobsPage() {
       setIsSubmitting(false);
     }
   }
-  
+
   const handleOpenFormDialog = (jobToEdit?: Job) => {
-    if (!canManageJobs) return; 
+    if (!canManageJobs) return;
     setSelectedJob(jobToEdit || null);
     if (jobToEdit) {
       adminForm.reset({
@@ -464,7 +488,7 @@ export default function AdminJobsPage() {
 
         await updateDoc(jobDocRef, updateData);
         toast({ title: "Job Status Updated", description: `Status for job ${selectedJob.jobNumber} updated to ${values.status}.`});
-        
+
         const updatedJobInState = { ...selectedJob, ...updateData, lastUpdated: Timestamp.now(), completionDate: (values.status === "Completed" && !selectedJob.completionDate) ? Timestamp.now() : selectedJob.completionDate } as Job;
         setJobs(prevJobs => prevJobs.map(j => j.id === selectedJob.id ? updatedJobInState : j ));
         setSelectedJob(updatedJobInState);
@@ -511,7 +535,7 @@ export default function AdminJobsPage() {
   if (!["admin", "technician"].includes(userProfile.role)) {
     return <div className="flex h-screen items-center justify-center"><p>Access Denied.</p></div>;
   }
-  
+
   return (
     <div className="space-y-6">
       {canManageJobs && (
@@ -585,14 +609,14 @@ export default function AdminJobsPage() {
                   <FormMessage />
                 </FormItem>
               )} />
-              
+
               <FormField control={adminForm.control} name="description" render={({ field }) => (
                 <FormItem> <FormLabel>Job Description</FormLabel> <FormControl><Textarea placeholder="Detailed description of the work to be done..." {...field} /></FormControl> <FormMessage /> </FormItem>
               )} />
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <FormField control={adminForm.control} name="status" render={({ field }) => (
-                    <FormItem> <FormLabel>Status</FormLabel> 
+                    <FormItem> <FormLabel>Status</FormLabel>
                         <ShadSelect onValueChange={field.onChange} value={field.value}>
                             <FormControl>
                                 <SelectTrigger>
@@ -671,7 +695,7 @@ export default function AdminJobsPage() {
                 {selectedJob.estimateId && <><strong className="text-muted-foreground">Estimate ID:</strong><p>{selectedJob.estimateId}</p></>}
                 {selectedJob.invoiceCreated && <><strong className="text-muted-foreground">Invoice Created:</strong><p className="text-green-600">Yes</p></>}
               </div>
-              
+
               <div>
                 <h4 className="font-semibold text-muted-foreground mb-1">Description:</h4>
                 <p className="bg-muted/30 p-3 rounded-md whitespace-pre-wrap">{selectedJob.description}</p>
@@ -721,7 +745,7 @@ export default function AdminJobsPage() {
                  </Form>
               )}
 
-              {selectedJob.notes && (!technicianUpdateForm.getValues("notes") || userProfile?.role === 'admin') && ( 
+              {selectedJob.notes && (!technicianUpdateForm.getValues("notes") || userProfile?.role === 'admin') && (
                 <div>
                   <h4 className="font-semibold text-muted-foreground mb-1 mt-3">Customer Notes:</h4>
                   <p className="bg-muted/30 p-3 rounded-md whitespace-pre-wrap">{selectedJob.notes}</p>
@@ -746,7 +770,7 @@ export default function AdminJobsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      
+
       {canManageJobs && (
         <AlertDialog open={!!jobToDelete} onOpenChange={(open) => !open && setJobToDelete(null)}>
             <AlertDialogContent>
@@ -781,7 +805,7 @@ export default function AdminJobsPage() {
           </p>
         </div>
       </div>
-      
+
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle className="flex items-center">
@@ -804,7 +828,7 @@ export default function AdminJobsPage() {
                   <tr>
                     <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Job #</th>
                     <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Customer</th>
-                    {userProfile?.role === 'admin' && 
+                    {userProfile?.role === 'admin' &&
                       <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Technician</th>
                     }
                     <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Scheduled Date</th>
@@ -851,5 +875,3 @@ export default function AdminJobsPage() {
     </div>
   );
 }
-
-    
