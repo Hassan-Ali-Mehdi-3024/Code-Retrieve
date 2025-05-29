@@ -50,8 +50,8 @@ import { db } from "@/lib/firebase/config";
 import { collection, addDoc, getDocs, Timestamp, query, orderBy, doc, updateDoc, deleteDoc, serverTimestamp, where, getDoc } from "firebase/firestore"; // Added getDoc
 import { format, addDays } from "date-fns";
 import type { UserProfile } from "@/types";
-import type { Estimate, LineItem as EstimateLineItem } from "../estimates/page"; // Assuming Estimate types are exported
-import { generateInvoiceNumber, type InvoiceStatus, type InvoiceLineItem } from "../invoices/page"; // Assuming Invoice types/utils are exported
+import type { Estimate } from "../estimates/page"; 
+import { generateInvoiceNumber, type InvoiceStatus, type InvoiceLineItem } from "../invoices/page"; 
 
 interface Customer {
   id: string;
@@ -120,7 +120,7 @@ const getStatusBadgeVariant = (status: JobStatus) => {
   }
 };
 
-export const generateJobNumber = async (): Promise<string> => { // Export for use in Estimate automation
+export const generateJobNumber = async (): Promise<string> => { 
   const prefix = "JOB-";
   const datePart = format(new Date(), "yyyyMMdd");
   const jobsRef = collection(db, "jobs");
@@ -180,9 +180,15 @@ export default function AdminJobsPage() {
     }
     try {
       const usersCollectionRef = collection(db, "users");
-      const q = query(usersCollectionRef, where("role", "==", "technician"), orderBy("displayName", "asc"));
-      const querySnapshot = await getDocs(q);
-      const fetchedTechnicians = querySnapshot.docs.map(doc => ({ id: doc.id, uid: doc.id, ...doc.data() } as Technician));
+      // Fetch all users and filter/sort client-side to avoid composite index errors if not set up.
+      // FOR PERFORMANCE: Create a composite index in Firestore: collection 'users', fields 'role' (asc) and 'displayName' (asc).
+      const querySnapshot = await getDocs(usersCollectionRef);
+      const fetchedUsers = querySnapshot.docs.map(doc => ({ id: doc.id, uid: doc.id, ...doc.data() } as UserProfile));
+      
+      const fetchedTechnicians = fetchedUsers
+        .filter(user => user.role === "technician")
+        .sort((a, b) => (a.displayName || "").localeCompare(b.displayName || "")) as Technician[];
+      
       setTechnicians(fetchedTechnicians);
     } catch (error) {
       console.error("Error fetching technicians: ", error);
@@ -273,18 +279,17 @@ export default function AdminJobsPage() {
                     unitPrice: li.unitPrice,
                     totalPrice: li.totalPrice,
                 }));
-                taxRate = estimateData.taxRate; // Use tax rate from estimate
+                taxRate = estimateData.taxRate; 
             }
         }
 
         if (lineItems.length === 0) {
-            // Create a generic line item if no estimate details are found
             lineItems.push({ 
                 id: crypto.randomUUID(), 
-                description: `Services for job ${job.jobNumber}`, 
+                description: job.description || `Services for job ${job.jobNumber}`, 
                 quantity: 1, 
-                unitPrice: 0, // This should ideally be derived from job actuals or estimate
-                totalPrice: 0  // This should ideally be derived from job actuals or estimate
+                unitPrice: 0, 
+                totalPrice: 0  
             });
         }
         
@@ -300,7 +305,7 @@ export default function AdminJobsPage() {
             jobId: jobId,
             estimateId: job.estimateId || null,
             dateCreated: serverTimestamp(),
-            dueDate: Timestamp.fromDate(addDays(new Date(), 30)), // Default due date
+            dueDate: Timestamp.fromDate(addDays(new Date(), 30)), 
             lineItems,
             subtotal,
             taxRate,
@@ -315,12 +320,15 @@ export default function AdminJobsPage() {
 
         await addDoc(collection(db, "invoices"), newInvoiceData);
         
-        // Mark invoice as created on the job
         const jobDocRef = doc(db, "jobs", jobId);
         await updateDoc(jobDocRef, { invoiceCreated: true, lastUpdated: serverTimestamp() });
 
-        toast({ title: "Invoice Created", description: `Invoice ${invoiceNumber} automatically created for job ${job.jobNumber}.` });
-        fetchJobs(); // Refresh jobs to show invoiceCreated status
+        toast({ 
+            title: "Invoice Created", 
+            description: `Invoice ${invoiceNumber} automatically created for job ${job.jobNumber}. Please review and edit the invoice if necessary, especially line items and pricing.`,
+            duration: 7000, 
+        });
+        fetchJobs(); 
     } catch (error) {
         console.error("Error creating invoice from job: ", error);
         toast({ title: "Invoice Creation Error", description: "Failed to automatically create invoice.", variant: "destructive" });
@@ -382,12 +390,11 @@ export default function AdminJobsPage() {
         finalJobData = { 
             ...newJobDataWithTimestamps, 
             id: docRef.id, 
-            dateCreated: Timestamp.now(), // Approx for immediate use
-            lastUpdated: Timestamp.now(), // Approx for immediate use
+            dateCreated: Timestamp.now(), 
+            lastUpdated: Timestamp.now(), 
         } as Job;
       }
       
-      // Automation: Create invoice if status is "Completed"
       if (values.status === "Completed" && jobIdToUpdate && (!selectedJob || selectedJob.status !== "Completed")) {
          if (!finalJobData.invoiceCreated) {
             await createInvoiceFromJob(finalJobData, jobIdToUpdate);
@@ -458,17 +465,15 @@ export default function AdminJobsPage() {
         await updateDoc(jobDocRef, updateData);
         toast({ title: "Job Status Updated", description: `Status for job ${selectedJob.jobNumber} updated to ${values.status}.`});
         
-        const updatedJobInState = { ...selectedJob, ...updateData, lastUpdated: Timestamp.now(), completionDate: (values.status === "Completed" && !selectedJob.completionDate) ? Timestamp.now() : selectedJob.completionDate };
+        const updatedJobInState = { ...selectedJob, ...updateData, lastUpdated: Timestamp.now(), completionDate: (values.status === "Completed" && !selectedJob.completionDate) ? Timestamp.now() : selectedJob.completionDate } as Job;
         setJobs(prevJobs => prevJobs.map(j => j.id === selectedJob.id ? updatedJobInState : j ));
         setSelectedJob(updatedJobInState);
 
-        // Automation: Create invoice if status is "Completed" by technician
         if (values.status === "Completed" && selectedJob.status !== "Completed") {
             if (!updatedJobInState.invoiceCreated) {
                 await createInvoiceFromJob(updatedJobInState, selectedJob.id);
             }
         }
-        // No need to call fetchJobs() here due to optimistic update and automation refresh.
     } catch (error) {
         console.error("Error updating job status by technician:", error);
         toast({ title: "Update Error", description: "Failed to update job status.", variant: "destructive" });
@@ -709,7 +714,7 @@ export default function AdminJobsPage() {
                                 </FormItem>
                             )}
                         />
-                        <Button type="submit" disabled={isSubmitting || selectedJob.status === 'Completed'} size="sm">
+                        <Button type="submit" disabled={isSubmitting || (selectedJob.status === 'Completed' && selectedJob.invoiceCreated) } size="sm">
                             {isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving Status...</> : <><Save className="mr-2 h-4 w-4" />Save Status Update</>}
                         </Button>
                     </form>
