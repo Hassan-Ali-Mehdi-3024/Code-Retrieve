@@ -10,7 +10,7 @@ import * as z from "zod";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Building, PlusCircle, Edit, Eye, Mail, Phone, User, Briefcase as LeadSourceIcon, Loader2, BrainCircuit, Star } from "lucide-react";
+import { Building, PlusCircle, Edit, Eye, Mail, Phone, User, Briefcase as LeadSourceIcon, Loader2, BrainCircuit, Star, UserCheck, RefreshCw } from "lucide-react";
 import Image from "next/image";
 import {
   Dialog,
@@ -39,21 +39,21 @@ import { format } from "date-fns";
 import { scoreLead, type ScoreLeadInput, type ScoreLeadOutput } from "@/ai/flows/lead-scoring";
 
 // Define Lead Status type
-type LeadStatus = "New" | "Contacted" | "Qualified" | "Lost";
+type LeadStatus = "New" | "Contacted" | "Qualified" | "Lost" | "Converted";
 
 interface Lead {
   id: string;
   companyName: string;
   contactName: string;
   email: string;
-  phone?: string;
+  phone?: string | null; // Changed from string to string | null
   status: LeadStatus;
   source: string;
   dateAdded: Timestamp;
   lastUpdated?: Timestamp;
   logoUrl?: string; 
   dataAiHint?: string;
-  notes?: string;
+  notes?: string | null; // Changed from string to string | null
   // AI Scoring fields
   leadScore?: number;
   leadScoreReason?: string;
@@ -64,10 +64,10 @@ const leadSchema = z.object({
   companyName: z.string().min(2, "Company name must be at least 2 characters."),
   contactName: z.string().min(2, "Contact name must be at least 2 characters."),
   email: z.string().email("Invalid email address."),
-  phone: z.string().min(10, "Phone number seems too short.").optional().or(z.literal("")),
-  status: z.enum(["New", "Contacted", "Qualified", "Lost"]),
+  phone: z.string().min(10, "Phone number seems too short.").optional().or(z.literal("")).nullable(), // Allow null
+  status: z.enum(["New", "Contacted", "Qualified", "Lost", "Converted"]),
   source: z.string().min(2, "Source must be at least 2 characters."),
-  notes: z.string().optional(),
+  notes: z.string().optional().nullable(), // Allow null
 });
 
 const getStatusBadgeVariant = (status: LeadStatus) => {
@@ -78,6 +78,8 @@ const getStatusBadgeVariant = (status: LeadStatus) => {
       return "secondary";
     case "Qualified":
       return "outline"; 
+    case "Converted":
+      return "default"; // Consider a distinct color like success (green) if theme supports
     case "Lost":
       return "destructive";
     default:
@@ -98,6 +100,7 @@ export default function AdminLeadsPage() {
   const [isViewLeadDialogOpen, setIsViewLeadDialogOpen] = useState(false);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [isScoringLead, setIsScoringLead] = useState(false);
+  const [isConvertingToCustomer, setIsConvertingToCustomer] = useState(false);
 
   useEffect(() => {
     if (!authLoading && userProfile?.role !== "admin") {
@@ -108,6 +111,10 @@ export default function AdminLeadsPage() {
   const fetchLeads = async () => {
     setIsLoadingLeads(true);
     try {
+      if (!userProfile || userProfile.role !== "admin") {
+        setIsLoadingLeads(false);
+        return;
+      }
       const leadsCollectionRef = collection(db, "leads");
       const q = query(leadsCollectionRef, orderBy("dateAdded", "desc"));
       const querySnapshot = await getDocs(q);
@@ -132,7 +139,7 @@ export default function AdminLeadsPage() {
     if (userProfile?.role === "admin") {
       fetchLeads();
     }
-  }, [userProfile]); // Removed toast from dependency, fetchLeads is stable
+  }, [userProfile]); 
 
   const form = useForm<z.infer<typeof leadSchema>>({
     resolver: zodResolver(leadSchema),
@@ -156,8 +163,8 @@ export default function AdminLeadsPage() {
       const newLeadData = {
         ...values,
         status: values.status as LeadStatus,
-        phone: values.phone || null, // Store as null if empty string for consistency
-        notes: values.notes || null, // Store as null if empty string
+        phone: values.phone || null,
+        notes: values.notes || null,
         dateAdded: serverTimestamp(),
         lastUpdated: serverTimestamp(),
         logoUrl: `https://placehold.co/40x40.png?text=${values.companyName.substring(0,2).toUpperCase()}`,
@@ -191,7 +198,7 @@ export default function AdminLeadsPage() {
         contactName: lead.contactName || "",
         email: lead.email || "",
         phone: lead.phone || "",
-        status: lead.status, // Status should always be defined as per LeadStatus
+        status: lead.status, 
         source: lead.source || "",
         notes: lead.notes || "",
     });
@@ -231,18 +238,19 @@ export default function AdminLeadsPage() {
     setIsViewLeadDialogOpen(true);
   };
 
-  const handleScoreLead = async () => {
-    if (!selectedLead) return;
+  const handleScoreLead = async (leadToScore?: Lead) => {
+    const currentLead = leadToScore || selectedLead;
+    if (!currentLead) return;
     setIsScoringLead(true);
     try {
-      const inquiry = `Lead for ${selectedLead.companyName} (Contact: ${selectedLead.contactName}, Email: ${selectedLead.email}). Source: ${selectedLead.source}. Notes: ${selectedLead.notes || 'N/A'}`;
+      const inquiry = `Lead for ${currentLead.companyName} (Contact: ${currentLead.contactName}, Email: ${currentLead.email}). Source: ${currentLead.source}. Notes: ${currentLead.notes || 'N/A'}`;
       const scoreLeadInput: ScoreLeadInput = {
         initialInquiry: inquiry,
         websiteActivity: "Lead manually entered/managed in CRM.", 
       };
       const scoreOutput: ScoreLeadOutput = await scoreLead(scoreLeadInput);
       
-      const leadDocRef = doc(db, "leads", selectedLead.id);
+      const leadDocRef = doc(db, "leads", currentLead.id);
       await updateDoc(leadDocRef, {
         leadScore: scoreOutput.leadScore,
         leadScoreReason: scoreOutput.reason,
@@ -251,16 +259,18 @@ export default function AdminLeadsPage() {
       });
 
       const updatedLeadWithScore = {
-        ...selectedLead, 
-        ...scoreOutput, 
+        ...currentLead, 
+        leadScore: scoreOutput.leadScore,
+        leadScoreReason: scoreOutput.reason,
+        isQualified: scoreOutput.isQualified,
         lastUpdated: Timestamp.now() 
       };
-      setSelectedLead(updatedLeadWithScore);
-      setLeads(prevLeads => prevLeads.map(l => l.id === selectedLead.id ? updatedLeadWithScore : l));
+      setSelectedLead(updatedLeadWithScore); // Update selected lead if viewed
+      setLeads(prevLeads => prevLeads.map(l => l.id === currentLead.id ? updatedLeadWithScore : l));
       
       toast({
         title: "Lead Scored",
-        description: `${selectedLead.companyName} has been scored by AI.`,
+        description: `${currentLead.companyName} has been scored by AI.`,
       });
     } catch (error) {
       console.error("Error scoring lead with AI: ", error);
@@ -274,8 +284,57 @@ export default function AdminLeadsPage() {
     }
   };
 
+  const handleConvertToCustomer = async () => {
+    if (!selectedLead) return;
+    setIsConvertingToCustomer(true);
+    try {
+      const newCustomerData = {
+        companyName: selectedLead.companyName,
+        contactName: selectedLead.contactName,
+        email: selectedLead.email,
+        phone: selectedLead.phone || null,
+        address: null, // Lead object doesn't have address, can be added later
+        notes: selectedLead.notes || null,
+        customerSince: serverTimestamp(),
+        lastUpdated: serverTimestamp(),
+        logoUrl: `https://placehold.co/40x40.png?text=${selectedLead.companyName.substring(0,2).toUpperCase()}`,
+        dataAiHint: "company logo",
+        // You might want to link back to the original lead ID
+        originalLeadId: selectedLead.id, 
+      };
 
-  if (authLoading || (!userProfile && !isLoadingLeads)) { // Adjusted loading check
+      const customersCollectionRef = collection(db, "customers");
+      await addDoc(customersCollectionRef, newCustomerData);
+
+      // Update lead status to "Converted"
+      const leadDocRef = doc(db, "leads", selectedLead.id);
+      await updateDoc(leadDocRef, {
+        status: "Converted" as LeadStatus,
+        lastUpdated: serverTimestamp(),
+      });
+      
+      toast({
+        title: "Lead Converted",
+        description: `${selectedLead.companyName} has been successfully converted to a customer.`,
+      });
+
+      setIsViewLeadDialogOpen(false); // Close view dialog
+      fetchLeads(); // Refresh leads list
+
+    } catch (error) {
+      console.error("Error converting lead to customer: ", error);
+      toast({
+        title: "Conversion Error",
+        description: "Failed to convert lead to customer. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsConvertingToCustomer(false);
+    }
+  };
+
+
+  if (authLoading || (!userProfile && !isLoadingLeads)) { 
     return (
       <div className="flex h-screen items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -311,129 +370,16 @@ export default function AdminLeadsPage() {
           </DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onAddLeadSubmit)} className="space-y-4 py-2 max-h-[70vh] overflow-y-auto pr-2">
-              <FormField
-                control={form.control}
-                name="companyName"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Company Name</FormLabel>
-                    <FormControl>
-                      <div className="relative">
-                        <Building className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input placeholder="e.g. Acme Corp" {...field} className="pl-10" />
-                      </div>
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="contactName"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Contact Name</FormLabel>
-                    <FormControl>
-                       <div className="relative">
-                        <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input placeholder="e.g. John Doe" {...field} className="pl-10" />
-                      </div>
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="email"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Email</FormLabel>
-                    <FormControl>
-                      <div className="relative">
-                        <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input type="email" placeholder="e.g. john.doe@example.com" {...field} className="pl-10" />
-                      </div>
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="phone"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Phone (Optional)</FormLabel>
-                    <FormControl>
-                      <div className="relative">
-                        <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input type="tel" placeholder="e.g. 555-123-4567" {...field} className="pl-10" />
-                      </div>
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="status"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Status</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select lead status" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="New">New</SelectItem>
-                        <SelectItem value="Contacted">Contacted</SelectItem>
-                        <SelectItem value="Qualified">Qualified</SelectItem>
-                        <SelectItem value="Lost">Lost</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="source"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Source</FormLabel>
-                    <FormControl>
-                      <div className="relative">
-                        <LeadSourceIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input placeholder="e.g. Website, Referral" {...field} className="pl-10" />
-                      </div>
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="notes"
-                render={({ field }) => (
-                    <FormItem>
-                        <FormLabel>Notes (Optional)</FormLabel>
-                        <FormControl>
-                            <Textarea placeholder="Any additional notes about this lead..." {...field} />
-                        </FormControl>
-                        <FormMessage />
-                    </FormItem>
-                )}
-               />
+              <FormField control={form.control} name="companyName" render={({ field }) => ( <FormItem> <FormLabel>Company Name</FormLabel> <FormControl><div className="relative"><Building className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. Acme Corp" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
+              <FormField control={form.control} name="contactName" render={({ field }) => ( <FormItem> <FormLabel>Contact Name</FormLabel> <FormControl><div className="relative"><User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. John Doe" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
+              <FormField control={form.control} name="email" render={({ field }) => ( <FormItem> <FormLabel>Email</FormLabel> <FormControl><div className="relative"><Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input type="email" placeholder="e.g. john.doe@example.com" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
+              <FormField control={form.control} name="phone" render={({ field }) => ( <FormItem> <FormLabel>Phone (Optional)</FormLabel> <FormControl><div className="relative"><Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input type="tel" placeholder="e.g. 555-123-4567" {...field} value={field.value ?? ""} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
+              <FormField control={form.control} name="status" render={({ field }) => ( <FormItem> <FormLabel>Status</FormLabel> <Select onValueChange={field.onChange} defaultValue={field.value}> <FormControl><SelectTrigger><SelectValue placeholder="Select lead status" /></SelectTrigger></FormControl> <SelectContent> <SelectItem value="New">New</SelectItem> <SelectItem value="Contacted">Contacted</SelectItem> <SelectItem value="Qualified">Qualified</SelectItem> <SelectItem value="Lost">Lost</SelectItem> <SelectItem value="Converted">Converted</SelectItem></SelectContent> </Select> <FormMessage /> </FormItem> )} />
+              <FormField control={form.control} name="source" render={({ field }) => ( <FormItem> <FormLabel>Source</FormLabel> <FormControl><div className="relative"><LeadSourceIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. Website, Referral" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
+              <FormField control={form.control} name="notes" render={({ field }) => ( <FormItem> <FormLabel>Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Any additional notes about this lead..." {...field} value={field.value ?? ""} /></FormControl> <FormMessage /> </FormItem> )} />
               <DialogFooter className="pt-4">
-                <Button type="button" variant="outline" onClick={() => { setIsAddLeadDialogOpen(false); form.reset();}}>
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={form.formState.isSubmitting}>
-                  {form.formState.isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : "Save Lead"}
-                </Button>
+                <Button type="button" variant="outline" onClick={() => { setIsAddLeadDialogOpen(false); form.reset();}}>Cancel</Button>
+                <Button type="submit" disabled={form.formState.isSubmitting}>{form.formState.isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : "Save Lead"}</Button>
               </DialogFooter>
             </form>
           </Form>
@@ -445,26 +391,20 @@ export default function AdminLeadsPage() {
         <DialogContent className="sm:max-w-[520px]">
           <DialogHeader>
             <DialogTitle>Edit Lead: {selectedLead?.companyName}</DialogTitle>
-            <DialogDescription>
-              Update the details for this lead. Click save when you're done.
-            </DialogDescription>
+            <DialogDescription>Update the details for this lead. Click save when you're done.</DialogDescription>
           </DialogHeader>
           <Form {...editForm}>
             <form onSubmit={editForm.handleSubmit(onEditLeadSubmit)} className="space-y-4 py-2 max-h-[70vh] overflow-y-auto pr-2">
                <FormField control={editForm.control} name="companyName" render={({ field }) => ( <FormItem> <FormLabel>Company Name</FormLabel> <FormControl><div className="relative"><Building className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. Acme Corp" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
                <FormField control={editForm.control} name="contactName" render={({ field }) => ( <FormItem> <FormLabel>Contact Name</FormLabel> <FormControl><div className="relative"><User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. John Doe" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
                <FormField control={editForm.control} name="email" render={({ field }) => ( <FormItem> <FormLabel>Email</FormLabel> <FormControl><div className="relative"><Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input type="email" placeholder="e.g. john.doe@example.com" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
-               <FormField control={editForm.control} name="phone" render={({ field }) => ( <FormItem> <FormLabel>Phone (Optional)</FormLabel> <FormControl><div className="relative"><Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input type="tel" placeholder="e.g. 555-123-4567" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
-               <FormField control={editForm.control} name="status" render={({ field }) => ( <FormItem> <FormLabel>Status</FormLabel> <Select onValueChange={field.onChange} defaultValue={field.value}> <FormControl><SelectTrigger><SelectValue placeholder="Select lead status" /></SelectTrigger></FormControl> <SelectContent> <SelectItem value="New">New</SelectItem> <SelectItem value="Contacted">Contacted</SelectItem> <SelectItem value="Qualified">Qualified</SelectItem> <SelectItem value="Lost">Lost</SelectItem> </SelectContent> </Select> <FormMessage /> </FormItem> )} />
+               <FormField control={editForm.control} name="phone" render={({ field }) => ( <FormItem> <FormLabel>Phone (Optional)</FormLabel> <FormControl><div className="relative"><Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input type="tel" placeholder="e.g. 555-123-4567" {...field} value={field.value ?? ""} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
+               <FormField control={editForm.control} name="status" render={({ field }) => ( <FormItem> <FormLabel>Status</FormLabel> <Select onValueChange={field.onChange} defaultValue={field.value}> <FormControl><SelectTrigger><SelectValue placeholder="Select lead status" /></SelectTrigger></FormControl> <SelectContent> <SelectItem value="New">New</SelectItem> <SelectItem value="Contacted">Contacted</SelectItem> <SelectItem value="Qualified">Qualified</SelectItem> <SelectItem value="Lost">Lost</SelectItem> <SelectItem value="Converted">Converted</SelectItem> </SelectContent> </Select> <FormMessage /> </FormItem> )} />
                <FormField control={editForm.control} name="source" render={({ field }) => ( <FormItem> <FormLabel>Source</FormLabel> <FormControl><div className="relative"><LeadSourceIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. Website, Referral" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
-               <FormField control={editForm.control} name="notes" render={({ field }) => ( <FormItem> <FormLabel>Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Any additional notes about this lead..." {...field} /></FormControl> <FormMessage /> </FormItem> )} />
+               <FormField control={editForm.control} name="notes" render={({ field }) => ( <FormItem> <FormLabel>Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Any additional notes about this lead..." {...field} value={field.value ?? ""} /></FormControl> <FormMessage /> </FormItem> )} />
               <DialogFooter className="pt-4">
-                <Button type="button" variant="outline" onClick={() => { setIsEditLeadDialogOpen(false); setSelectedLead(null); }}>
-                  Cancel
-                </Button>
-                <Button type="submit" disabled={editForm.formState.isSubmitting}>
-                  {editForm.formState.isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving Changes...</> : "Save Changes"}
-                </Button>
+                <Button type="button" variant="outline" onClick={() => { setIsEditLeadDialogOpen(false); setSelectedLead(null); }}>Cancel</Button>
+                <Button type="submit" disabled={editForm.formState.isSubmitting}>{editForm.formState.isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving Changes...</> : "Save Changes"}</Button>
               </DialogFooter>
             </form>
           </Form>
@@ -479,16 +419,13 @@ export default function AdminLeadsPage() {
               <Image 
                 src={selectedLead?.logoUrl || `https://placehold.co/40x40.png?text=${selectedLead?.companyName?.substring(0,2)?.toUpperCase() || 'L'}`} 
                 alt={selectedLead?.companyName || "Lead"} 
-                width={32} 
-                height={32} 
+                width={32} height={32} 
                 className="rounded-md mr-3 object-contain" 
                 data-ai-hint={selectedLead?.dataAiHint || "company logo"}
               />
               {selectedLead?.companyName}
             </DialogTitle>
-            <DialogDescription>
-              Detailed information for this lead.
-            </DialogDescription>
+            <DialogDescription>Detailed information for this lead.</DialogDescription>
           </DialogHeader>
           {selectedLead && (
             <div className="space-y-4 py-2 max-h-[70vh] overflow-y-auto pr-2">
@@ -524,25 +461,37 @@ export default function AdminLeadsPage() {
                       </div>
                       <p><strong className="text-muted-foreground">Qualification:</strong> {selectedLead.isQualified ? <Badge variant="outline">Qualified</Badge> : <Badge variant="destructive">Not Qualified</Badge>}</p>
                       <p><strong className="text-muted-foreground">Reason:</strong> {selectedLead.leadScoreReason}</p>
-                      <Button variant="outline" size="sm" onClick={handleScoreLead} disabled={isScoringLead} className="mt-2">
-                        {isScoringLead ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Re-scoring...</> : <><BrainCircuit className="mr-2 h-4 w-4" /> Re-Score Lead</>}
+                      <Button variant="outline" size="sm" onClick={() => handleScoreLead()} disabled={isScoringLead} className="mt-2">
+                        {isScoringLead ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Re-scoring...</> : <><RefreshCw className="mr-2 h-4 w-4" /> Re-Score Lead</>}
                       </Button>
                     </div>
                   ) : (
                     <div className="text-center">
                       <p className="text-muted-foreground mb-3">No AI score available for this lead yet.</p>
-                      <Button onClick={handleScoreLead} disabled={isScoringLead}>
+                      <Button onClick={() => handleScoreLead()} disabled={isScoringLead}>
                         {isScoringLead ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Scoring...</> : <><BrainCircuit className="mr-2 h-4 w-4" /> Score Lead with AI</>}
                       </Button>
                     </div>
                   )}
                 </CardContent>
               </Card>
+
+              {selectedLead.isQualified && selectedLead.status !== "Converted" && (
+                <div className="mt-4 pt-4 border-t">
+                  <Button 
+                    onClick={handleConvertToCustomer} 
+                    disabled={isConvertingToCustomer} 
+                    className="w-full"
+                  >
+                    {isConvertingToCustomer ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Converting...</> : <><UserCheck className="mr-2 h-4 w-4" /> Convert to Customer</>}
+                  </Button>
+                </div>
+              )}
             </div>
           )}
           <DialogFooter className="pt-4">
             <Button variant="outline" onClick={() => setIsViewLeadDialogOpen(false)}>Close</Button>
-             <Button onClick={() => { if(selectedLead) { setIsViewLeadDialogOpen(false); handleEditLead(selectedLead); } }}>
+             <Button onClick={() => { if(selectedLead) { setIsViewLeadDialogOpen(false); handleEditLead(selectedLead); } }} disabled={selectedLead?.status === "Converted"}>
                 <Edit className="mr-2 h-4 w-4" /> Edit Lead
             </Button>
           </DialogFooter>
@@ -552,27 +501,21 @@ export default function AdminLeadsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Lead Management</h1>
-          <p className="text-muted-foreground">
-            Oversee and manage all potential client leads for LuxeFlow.
-          </p>
+          <p className="text-muted-foreground">Oversee and manage all potential client leads for LuxeFlow.</p>
         </div>
       </div>
       
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle className="flex items-center">
-            <Building className="mr-2 h-5 w-5 text-primary" />
-            Current Leads ({leads.length})
+            <Building className="mr-2 h-5 w-5 text-primary" /> Current Leads ({leads.length})
           </CardTitle>
-          <CardDescription>
-            View and manage incoming and ongoing leads in the system.
-          </CardDescription>
+          <CardDescription>View and manage incoming and ongoing leads in the system.</CardDescription>
         </CardHeader>
         <CardContent>
           {isLoadingLeads ? (
             <div className="flex items-center justify-center py-10">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              <p className="ml-2">Loading leads...</p>
+              <Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="ml-2">Loading leads...</p>
             </div>
           ) : leads.length > 0 ? (
             <ul className="space-y-4">
@@ -582,8 +525,7 @@ export default function AdminLeadsPage() {
                     <Image 
                       src={lead.logoUrl || `https://placehold.co/40x40.png?text=${lead.companyName.substring(0,2).toUpperCase()}`} 
                       alt={lead.companyName} 
-                      width={40} 
-                      height={40} 
+                      width={40} height={40} 
                       className="rounded-md object-contain" 
                       data-ai-hint={lead.dataAiHint || "company logo"}
                     />
@@ -601,7 +543,7 @@ export default function AdminLeadsPage() {
                         <Button variant="outline" size="sm" onClick={() => handleViewLead(lead)}> 
                             <Eye className="mr-1 h-3 w-3" /> View
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => handleEditLead(lead)}>
+                        <Button variant="outline" size="sm" onClick={() => handleEditLead(lead)} disabled={lead.status === "Converted"}>
                             <Edit className="mr-1 h-3 w-3" /> Edit
                         </Button>
                      </div>
@@ -621,3 +563,6 @@ export default function AdminLeadsPage() {
     </div>
   );
 }
+
+
+    
