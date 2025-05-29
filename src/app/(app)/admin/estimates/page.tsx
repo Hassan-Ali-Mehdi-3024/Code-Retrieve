@@ -48,7 +48,16 @@ import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase/config";
 import { collection, addDoc, getDocs, Timestamp, query, orderBy, doc, updateDoc, deleteDoc, serverTimestamp, where, writeBatch } from "firebase/firestore";
 import { format, addDays } from "date-fns";
-import type { Customer } from "@/app/(app)/admin/customers/page"; // Assuming path
+import type { UserProfile } from "@/types"; // Assuming UserProfile type is defined
+
+// Assuming Customer type is available, e.g., from customer page or types file
+interface Customer {
+  id: string;
+  companyName: string;
+  contactName: string;
+  email: string;
+  // Add other fields as necessary from your customer data structure
+}
 
 type EstimateStatus = "Draft" | "Sent" | "Accepted" | "Rejected" | "Expired";
 
@@ -100,7 +109,7 @@ const getStatusBadgeVariant = (status: EstimateStatus) => {
   switch (status) {
     case "Draft": return "secondary";
     case "Sent": return "default";
-    case "Accepted": return "outline"; // Consider a success variant
+    case "Accepted": return "outline"; 
     case "Rejected": return "destructive";
     case "Expired": return "outline";
     default: return "default";
@@ -108,10 +117,8 @@ const getStatusBadgeVariant = (status: EstimateStatus) => {
 };
 
 const generateEstimateNumber = async (): Promise<string> => {
-  // Basic number generation, could be more sophisticated (e.g., fetch last number from a settings doc)
   const prefix = "EST-";
   const datePart = format(new Date(), "yyyyMMdd");
-  // For uniqueness, query count of estimates on current date. Not truly atomic without server-side logic.
   const estimatesRef = collection(db, "estimates");
   const todayStart = new Timestamp(Math.floor(new Date().setHours(0,0,0,0) / 1000), 0);
   const q = query(estimatesRef, where("dateCreated", ">=", todayStart));
@@ -190,38 +197,36 @@ export default function AdminEstimatesPage() {
     },
   });
 
-  const { fields: lineItemFields, append: appendLineItem, remove: removeLineItem, update: updateLineItem } = form.control.register('lineItems', { value: [] }) && form.watch('lineItems') ?
-    // @ts-ignore TODO: Fix this type issue with react-hook-form useFieldArray if it persists
-    // This is a common workaround for type inference issues with useFieldArray in complex scenarios.
-    // Ideally, useFieldArray from react-hook-form should be used directly.
-    // For now, we'll manually manage for simplicity in this prototype stage
-    (() => {
-        const items = form.watch('lineItems');
-        return {
-            fields: items.map((item, index) => ({ ...item, id: item.id || crypto.randomUUID(), _formIndex: index })),
-            append: (item: Omit<LineItem, 'totalPrice' | 'id'>) => { // id is generated, totalPrice calculated
-                const currentItems = form.getValues('lineItems');
-                form.setValue('lineItems', [...currentItems, { ...item, id: crypto.randomUUID(), totalPrice: item.quantity * item.unitPrice }]);
-            },
-            remove: (index: number) => {
-                const currentItems = form.getValues('lineItems');
-                form.setValue('lineItems', currentItems.filter((_, i) => i !== index));
-            },
-            update: (index: number, item: Partial<Omit<LineItem, 'id'>>) => { // id should not be updated this way
-                 const currentItems = form.getValues('lineItems');
-                 const updatedItems = [...currentItems];
-                 // Ensure the item at the index exists
-                 if (updatedItems[index]) {
-                    updatedItems[index] = { ...updatedItems[index], ...item } as LineItem;
-                    if(item.quantity !== undefined || item.unitPrice !== undefined){
-                        updatedItems[index].totalPrice = (item.quantity ?? updatedItems[index].quantity) * (item.unitPrice ?? updatedItems[index].unitPrice);
-                    }
-                    form.setValue('lineItems', updatedItems);
-                 }
-            }
-        };
-    })()
-    : { fields: [], append: () => {}, remove: () => {}, update: () => {} };
+  // Manual management for lineItems array in the form
+  const watchedLineItemsForm = form.watch("lineItems") || [];
+  const lineItemFields = watchedLineItemsForm.map((item, index) => ({ ...item, id: item.id || crypto.randomUUID(), _formIndex: index }));
+
+  const appendLineItem = (item: Omit<LineItem, 'totalPrice' | 'id'>) => {
+    const currentItems = form.getValues('lineItems') || [];
+    form.setValue('lineItems', [...currentItems, { ...item, id: crypto.randomUUID(), totalPrice: item.quantity * item.unitPrice }]);
+  };
+
+  const removeLineItem = (index: number) => {
+    const currentItems = form.getValues('lineItems') || [];
+    form.setValue('lineItems', currentItems.filter((_, i) => i !== index));
+  };
+  
+  const updateLineItem = (index: number, updatedValues: Partial<Omit<LineItem, 'id' | 'totalPrice'>>) => {
+    const currentItems = form.getValues('lineItems') || [];
+    const updatedItems = [...currentItems];
+    if (updatedItems[index]) {
+        const currentItem = updatedItems[index];
+        updatedItems[index] = {
+            ...currentItem,
+            ...updatedValues,
+            quantity: updatedValues.quantity !== undefined ? Number(updatedValues.quantity) : Number(currentItem.quantity),
+            unitPrice: updatedValues.unitPrice !== undefined ? Number(updatedValues.unitPrice) : Number(currentItem.unitPrice),
+        } as LineItem; // Cast as LineItem
+        // Recalculate totalPrice
+        updatedItems[index].totalPrice = (updatedItems[index].quantity || 0) * (updatedItems[index].unitPrice || 0);
+        form.setValue('lineItems', updatedItems, { shouldValidate: true, shouldDirty: true });
+    }
+  };
 
 
   const calculateTotals = (lineItems: Omit<LineItem, 'id' | 'totalPrice'>[], taxRate: number) => {
@@ -234,25 +239,32 @@ export default function AdminEstimatesPage() {
   async function onSubmit(values: z.infer<typeof estimateSchema>) {
     setIsSubmitting(true);
     try {
-      const selectedCustomer = customers.find(c => c.id === values.customerId);
-      if (!selectedCustomer) {
+      const selectedCustomerDoc = customers.find(c => c.id === values.customerId);
+      if (!selectedCustomerDoc) {
         toast({ title: "Error", description: "Selected customer not found.", variant: "destructive" });
         setIsSubmitting(false);
         return;
       }
 
-      const totals = calculateTotals(values.lineItems, values.taxRate);
+      const validLineItems = values.lineItems.map(li => ({
+        id: li.id || crypto.randomUUID(),
+        description: li.description,
+        quantity: Number(li.quantity),
+        unitPrice: Number(li.unitPrice),
+        totalPrice: Number(li.quantity) * Number(li.unitPrice)
+      }));
       
-
-      const estimateDataForDb: Omit<Estimate, 'id' | 'estimateNumber' | 'dateCreated' | 'lastUpdated'> & { dateCreated?: Timestamp, lastUpdated?: Timestamp, estimateNumber?: string } = {
-        customerId: selectedCustomer.id,
-        customerName: selectedCustomer.companyName,
-        customerEmail: selectedCustomer.email,
+      const totals = calculateTotals(validLineItems, Number(values.taxRate));
+      
+      const estimateDataForDb = {
+        customerId: selectedCustomerDoc.id,
+        customerName: selectedCustomerDoc.companyName,
+        customerEmail: selectedCustomerDoc.email || undefined,
         validUntil: Timestamp.fromDate(values.validUntilDate),
         status: values.status,
-        lineItems: values.lineItems.map(li => ({...li, id: li.id || crypto.randomUUID(), totalPrice: li.quantity * li.unitPrice })),
+        lineItems: validLineItems,
         subtotal: totals.subtotal,
-        taxRate: values.taxRate,
+        taxRate: Number(values.taxRate),
         taxAmount: totals.taxAmount,
         totalAmount: totals.totalAmount,
         notes: values.notes || null,
@@ -295,12 +307,12 @@ export default function AdminEstimatesPage() {
         customerId: estimateToEdit.customerId,
         validUntilDate: estimateToEdit.validUntil.toDate(),
         status: estimateToEdit.status,
-        lineItems: estimateToEdit.lineItems.map(li => ({...li, unitPrice: Number(li.unitPrice), quantity: Number(li.quantity) })), // ensure numbers
+        lineItems: estimateToEdit.lineItems.map(li => ({...li, id: li.id || crypto.randomUUID(), unitPrice: Number(li.unitPrice), quantity: Number(li.quantity) })), 
         taxRate: estimateToEdit.taxRate,
         notes: estimateToEdit.notes || "",
       });
     } else {
-      form.reset({ // Reset to default values for new estimate, including generating new UUIDs for line items
+      form.reset({ 
         customerId: "",
         validUntilDate: addDays(new Date(), 30),
         status: "Draft",
@@ -338,12 +350,20 @@ export default function AdminEstimatesPage() {
     }
   }
 
-  // Watch line items and tax rate to recalculate totals dynamically in the form
-  const watchedLineItems = form.watch("lineItems");
-  const watchedTaxRate = form.watch("taxRate");
-  const currentSubtotal = React.useMemo(() => watchedLineItems.reduce((acc, item) => acc + (Number(item.quantity) * Number(item.unitPrice)), 0), [watchedLineItems]);
-  const currentTaxAmount = React.useMemo(() => currentSubtotal * (Number(watchedTaxRate) || 0), [currentSubtotal, watchedTaxRate]);
-  const currentTotalAmount = React.useMemo(() => currentSubtotal + currentTaxAmount, [currentSubtotal, currentTaxAmount]);
+  const watchedFormLineItems = form.watch("lineItems") || [];
+  const watchedFormTaxRate = form.watch("taxRate");
+
+  const currentSubtotal = React.useMemo(() => {
+    return watchedFormLineItems.reduce((acc, item) => acc + (Number(item.quantity) * Number(item.unitPrice)), 0);
+  }, [watchedFormLineItems]);
+
+  const currentTaxAmount = React.useMemo(() => {
+    return currentSubtotal * (Number(watchedFormTaxRate) || 0);
+  }, [currentSubtotal, watchedFormTaxRate]);
+
+  const currentTotalAmount = React.useMemo(() => {
+    return currentSubtotal + currentTaxAmount;
+  }, [currentSubtotal, currentTaxAmount]);
 
 
   if (authLoading || !userProfile) {
@@ -355,7 +375,6 @@ export default function AdminEstimatesPage() {
 
   return (
     <div className="space-y-6">
-      {/* Add/Edit Estimate Dialog */}
       <Dialog open={isFormDialogOpen} onOpenChange={(isOpen) => { setIsFormDialogOpen(isOpen); if (!isOpen) setSelectedEstimate(null); }}>
         <DialogTrigger asChild>
           <Button onClick={() => handleOpenFormDialog()}>
@@ -383,14 +402,13 @@ export default function AdminEstimatesPage() {
                         </Button>
                       </PopoverTrigger>
                       <PopoverContent className="w-[--radix-popover-trigger-width] max-h-[300px] overflow-y-auto p-0">
-                        {/* Basic search can be added here if needed, for now direct select */}
                         {customers.map(customer => (
-                          <div key={customer.id} onClick={() => {form.setValue("customerId", customer.id); (document.activeElement as HTMLElement)?.blur(); }}
+                          <div key={customer.id} onClick={() => {form.setValue("customerId", customer.id, {shouldValidate: true}); (document.activeElement as HTMLElement)?.blur(); }}
                                className="cursor-pointer p-2 hover:bg-accent hover:text-accent-foreground">
                             {customer.companyName} ({customer.contactName})
                           </div>
                         ))}
-                        {customers.length === 0 && <p className="p-2 text-sm text-muted-foreground">No customers found.</p>}
+                        {customers.length === 0 && <p className="p-2 text-sm text-muted-foreground">No customers found. Add customers first.</p>}
                       </PopoverContent>
                     </Popover>
                   </FormControl>
@@ -427,7 +445,6 @@ export default function AdminEstimatesPage() {
                 )} />
               </div>
 
-              {/* Line Items */}
               <div className="space-y-3">
                 <FormLabel>Line Items</FormLabel>
                 {lineItemFields.map((item, index) => (
@@ -443,14 +460,14 @@ export default function AdminEstimatesPage() {
                       <FormField control={form.control} name={`lineItems.${index}.quantity`} render={({ field }) => (
                         <FormItem className="col-span-2">
                            {index === 0 && <FormLabel className="text-xs">Qty</FormLabel>}
-                          <FormControl><Input type="number" placeholder="1" {...field} onChange={e => { field.onChange(e); updateLineItem(index, { quantity: parseFloat(e.target.value) }) }} /></FormControl>
+                          <FormControl><Input type="number" placeholder="1" {...field} onChange={e => { field.onChange(e); updateLineItem(index, { quantity: parseFloat(e.target.value) || 0 }) }} /></FormControl>
                            <FormMessage />
                         </FormItem>
                       )} />
                        <FormField control={form.control} name={`lineItems.${index}.unitPrice`} render={({ field }) => (
                         <FormItem className="col-span-2">
                            {index === 0 && <FormLabel className="text-xs">Unit Price</FormLabel>}
-                          <FormControl><Input type="number" placeholder="0.00" {...field} onChange={e => { field.onChange(e); updateLineItem(index, { unitPrice: parseFloat(e.target.value) }) }} /></FormControl>
+                          <FormControl><Input type="number" placeholder="0.00" {...field} onChange={e => { field.onChange(e); updateLineItem(index, { unitPrice: parseFloat(e.target.value) || 0 }) }} /></FormControl>
                            <FormMessage />
                         </FormItem>
                       )} />
@@ -472,24 +489,25 @@ export default function AdminEstimatesPage() {
                 <Button type="button" variant="outline" size="sm" onClick={() => appendLineItem({ description: "", quantity: 1, unitPrice: 0 })}>
                   <PlusCircle className="mr-2 h-4 w-4" /> Add Line Item
                 </Button>
+                {form.formState.errors.lineItems && typeof form.formState.errors.lineItems === 'object' && 'message' in form.formState.errors.lineItems && (
+                    <FormMessage>{(form.formState.errors.lineItems as any).message}</FormMessage>
+                )}
                  {form.formState.errors.lineItems && !form.formState.errors.lineItems.message && <FormMessage>{form.formState.errors.lineItems.root?.message || 'Please add at least one line item.'}</FormMessage>}
-
               </div>
 
-              {/* Totals & Tax */}
               <div className="grid grid-cols-2 gap-4 pt-4 border-t">
                  <FormField control={form.control} name="taxRate" render={({ field }) => (
                   <FormItem> <FormLabel>Tax Rate (e.g., 0.08 for 8%)</FormLabel>
                     <div className="relative">
                         <Percent className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <FormControl><Input type="number" step="0.001" placeholder="0.00" {...field} /></FormControl>
+                        <FormControl><Input type="number" step="0.001" placeholder="0.00" {...field} onChange={e => field.onChange(parseFloat(e.target.value) || 0)} /></FormControl>
                     </div>
                     <FormMessage />
                   </FormItem>
                 )} />
                 <div className="space-y-1 text-sm text-right">
                   <p>Subtotal: <span className="font-medium">${currentSubtotal.toFixed(2)}</span></p>
-                  <p>Tax ({((Number(watchedTaxRate) || 0) * 100).toFixed(1)}%): <span className="font-medium">${currentTaxAmount.toFixed(2)}</span></p>
+                  <p>Tax ({((Number(watchedFormTaxRate) || 0) * 100).toFixed(1)}%): <span className="font-medium">${currentTaxAmount.toFixed(2)}</span></p>
                   <p className="text-lg font-bold">Total: <span className="font-medium">${currentTotalAmount.toFixed(2)}</span></p>
                 </div>
               </div>
@@ -509,7 +527,6 @@ export default function AdminEstimatesPage() {
         </DialogContent>
       </Dialog>
 
-      {/* View Estimate Dialog */}
       <Dialog open={isViewDialogOpen} onOpenChange={(isOpen) => { setIsViewDialogOpen(isOpen); if (!isOpen) setSelectedEstimate(null); }}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
@@ -566,7 +583,6 @@ export default function AdminEstimatesPage() {
         </DialogContent>
       </Dialog>
       
-      {/* Delete Estimate Confirmation Dialog */}
       <AlertDialog open={!!estimateToDelete} onOpenChange={(open) => !open && setEstimateToDelete(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
