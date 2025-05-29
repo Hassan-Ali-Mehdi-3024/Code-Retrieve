@@ -15,23 +15,25 @@ export const siteConfig = {
       { title: "Customers", href: "/admin/customers", icon: Briefcase, roles: ["admin", "sales"] },
       { title: "Estimates", href: "/admin/estimates", icon: FileText, roles: ["admin", "sales"] },
       { title: "Jobs", href: "/admin/jobs", icon: Wrench, roles: ["admin", "technician"] },
-      { title: "Invoices", href: "/admin/invoices", icon: Receipt, roles: ["admin"] }, // Changed icon to Receipt
-      { title: "Settings", href: "/admin/settings", icon: Settings, roles: ["admin"] },
+      { title: "Invoices", href: "/admin/invoices", icon: Receipt, roles: ["admin"] }, 
+      { title: "Settings", href: "/settings", icon: Settings, roles: ["admin", "sales", "technician"] }, // Changed href and roles
     ] as NavItem[],
     sales: [
       { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard, roles: ["admin", "sales", "technician"] },
-      { title: "Leads", href: "/admin/leads", icon: Building, roles: ["admin", "sales"] }, // Point sales to admin leads
-      { title: "Customers", href: "/admin/customers", icon: Briefcase, roles: ["admin", "sales"] }, // Point sales to admin customers
-      { title: "Estimates", href: "/admin/estimates", icon: FileText, roles: ["admin", "sales"] }, // Point sales to admin estimates
+      { title: "Leads", href: "/admin/leads", icon: Building, roles: ["admin", "sales"] }, 
+      { title: "Customers", href: "/admin/customers", icon: Briefcase, roles: ["admin", "sales"] }, 
+      { title: "Estimates", href: "/admin/estimates", icon: FileText, roles: ["admin", "sales"] },
+      { title: "Settings", href: "/settings", icon: Settings, roles: ["admin", "sales", "technician"] },
     ] as NavItem[],
     technician: [
       { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard, roles: ["admin", "sales", "technician"] },
-      { title: "My Jobs", href: "/admin/jobs", icon: Wrench, roles: ["admin", "technician"] }, // Point tech to admin jobs (filtered view)
+      { title: "My Jobs", href: "/admin/jobs", icon: Wrench, roles: ["admin", "technician"] }, 
+      { title: "Settings", href: "/settings", icon: Settings, roles: ["admin", "sales", "technician"] },
     ] as NavItem[],
   },
   userNav: [
-    { title: "Profile", href: "/profile", icon: UserCircle },
-    { title: "Settings", href: "/settings", icon: Settings },
+    { title: "Profile", href: "/profile", icon: UserCircle }, // This could perhaps link to /settings#profile or be removed if settings covers it
+    // { title: "Settings", href: "/settings", icon: Settings }, // This is now in the main sidebar
     // Logout is handled separately
   ] as NavItem[],
 };
@@ -41,14 +43,10 @@ export function getSidebarNavItems(role: UserRole): NavItem[] {
     case "admin":
       return siteConfig.sidebarNav.admin;
     case "sales":
-      // Sales users will use the admin routes for shared resources.
-      // We filter siteConfig.sidebarNav.admin to only include items relevant to sales.
       return siteConfig.sidebarNav.admin.filter(item => 
         item.roles?.includes("sales")
       );
     case "technician":
-      // Technicians will use the admin routes for shared resources.
-      // We filter siteConfig.sidebarNav.admin to only include items relevant to technicians.
        return siteConfig.sidebarNav.admin.filter(item => 
         item.roles?.includes("technician")
       );
