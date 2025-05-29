@@ -16,7 +16,7 @@ export const siteConfig = {
       { title: "Estimates", href: "/admin/estimates", icon: FileText, roles: ["admin", "sales"] },
       { title: "Jobs", href: "/admin/jobs", icon: Wrench, roles: ["admin", "technician"] },
       { title: "Invoices", href: "/admin/invoices", icon: Receipt, roles: ["admin"] }, 
-      { title: "Settings", href: "/settings", icon: Settings, roles: ["admin", "sales", "technician"] }, // Changed href and roles
+      { title: "Settings", href: "/settings", icon: Settings, roles: ["admin", "sales", "technician"] },
     ] as NavItem[],
     sales: [
       { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard, roles: ["admin", "sales", "technician"] },
@@ -32,9 +32,9 @@ export const siteConfig = {
     ] as NavItem[],
   },
   userNav: [
-    { title: "Profile", href: "/profile", icon: UserCircle }, // This could perhaps link to /settings#profile or be removed if settings covers it
-    // { title: "Settings", href: "/settings", icon: Settings }, // This is now in the main sidebar
-    // Logout is handled separately
+    { title: "Profile", href: "/profile", icon: UserCircle }, 
+    // Settings link is in the main sidebar for all roles
+    // Logout is handled separately in UserNav component
   ] as NavItem[],
 };
 
