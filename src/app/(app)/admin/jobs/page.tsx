@@ -144,6 +144,11 @@ export default function AdminJobsPage() {
   }, [userProfile, authLoading, router]);
 
   const fetchCustomers = useCallback(async () => {
+    // Only admins need full customer list for creating jobs
+    if (userProfile?.role !== 'admin') {
+      setCustomers([]);
+      return;
+    }
     try {
       const customersCollectionRef = collection(db, "customers");
       const q = query(customersCollectionRef, orderBy("companyName", "asc"));
@@ -154,26 +159,44 @@ export default function AdminJobsPage() {
       console.error("Error fetching customers: ", error);
       toast({ title: "Error", description: "Failed to fetch customers.", variant: "destructive" });
     }
-  }, [toast]);
+  }, [toast, userProfile]);
 
   const fetchTechnicians = useCallback(async () => {
+     // Only admins need full technician list for assigning jobs
+    if (userProfile?.role !== 'admin') {
+      setTechnicians([]);
+      return;
+    }
     try {
       const usersCollectionRef = collection(db, "users");
       const q = query(usersCollectionRef, where("role", "==", "technician"), orderBy("displayName", "asc"));
       const querySnapshot = await getDocs(q);
-      const fetchedTechnicians = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Technician));
+      const fetchedTechnicians = querySnapshot.docs.map(doc => ({ id: doc.id, uid: doc.id, ...doc.data() } as Technician)); // Ensure uid is mapped from doc.id for Technician type
       setTechnicians(fetchedTechnicians);
     } catch (error) {
       console.error("Error fetching technicians: ", error);
       toast({ title: "Error", description: "Failed to fetch technicians.", variant: "destructive" });
     }
-  }, [toast]);
+  }, [toast, userProfile]);
   
   const fetchJobs = useCallback(async () => {
+    if (!userProfile) return; 
+
     setIsLoading(true);
     try {
       const jobsCollectionRef = collection(db, "jobs");
-      const q = query(jobsCollectionRef, orderBy("dateCreated", "desc"));
+      let q;
+
+      if (userProfile.role === 'admin') {
+        q = query(jobsCollectionRef, orderBy("dateCreated", "desc"));
+      } else if (userProfile.role === 'technician') {
+        q = query(jobsCollectionRef, where("assignedTechnicianId", "==", userProfile.uid), orderBy("dateCreated", "desc"));
+      } else {
+        setJobs([]); // Should not happen due to page-level role check
+        setIsLoading(false);
+        return;
+      }
+      
       const querySnapshot = await getDocs(q);
       const fetchedJobs = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Job));
       setJobs(fetchedJobs);
@@ -183,7 +206,7 @@ export default function AdminJobsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [toast]);
+  }, [toast, userProfile]);
 
   useEffect(() => {
     if (userProfile && ["admin", "technician"].includes(userProfile.role)) {
@@ -209,6 +232,10 @@ export default function AdminJobsPage() {
   });
 
   async function onSubmit(values: z.infer<typeof jobSchema>) {
+    if (userProfile?.role !== 'admin') {
+        toast({ title: "Unauthorized", description: "Only admins can create or edit jobs here.", variant: "destructive" });
+        return;
+    }
     setIsSubmitting(true);
     try {
       const selectedCustomerDoc = customers.find(c => c.id === values.customerId);
@@ -264,6 +291,7 @@ export default function AdminJobsPage() {
   }
   
   const handleOpenFormDialog = (jobToEdit?: Job) => {
+    if (userProfile?.role !== 'admin') return; // Only admins can open the form dialog
     setSelectedJob(jobToEdit || null);
     if (jobToEdit) {
       form.reset({
@@ -299,11 +327,12 @@ export default function AdminJobsPage() {
   };
 
   const handleDeleteJob = (job: Job) => {
+    if (userProfile?.role !== 'admin') return;
     setJobToDelete(job);
   };
 
   async function confirmDeleteJob() {
-    if (!jobToDelete) return;
+    if (!jobToDelete || userProfile?.role !== 'admin') return;
     setIsSubmitting(true);
     try {
       const jobDocRef = doc(db, "jobs", jobToDelete.id);
@@ -323,23 +352,24 @@ export default function AdminJobsPage() {
     return <div className="flex h-screen items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="ml-2">Loading...</p></div>;
   }
   if (!["admin", "technician"].includes(userProfile.role)) {
+    // This check should be redundant due to the useEffect redirect, but good as a fallback.
     return <div className="flex h-screen items-center justify-center"><p>Access Denied.</p></div>;
   }
   
-  // Technicians might have a filtered view or different capabilities later
   const canManageJobs = userProfile.role === "admin";
 
 
   return (
     <div className="space-y-6">
       <Dialog open={isFormDialogOpen} onOpenChange={(isOpen) => { setIsFormDialogOpen(isOpen); if (!isOpen) setSelectedJob(null); }}>
-        <DialogTrigger asChild>
-          {canManageJobs && (
-            <Button onClick={() => handleOpenFormDialog()}>
-              <PlusCircle className="mr-2 h-4 w-4" /> Create New Job
-            </Button>
-          )}
-        </DialogTrigger>
+        {/* DialogTrigger is only shown to admins */}
+        {canManageJobs && (
+            <DialogTrigger asChild>
+                <Button onClick={() => handleOpenFormDialog()}>
+                <PlusCircle className="mr-2 h-4 w-4" /> Create New Job
+                </Button>
+            </DialogTrigger>
+        )}
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{selectedJob ? "Edit Job" : "Create New Job"} {selectedJob?.jobNumber && `(${selectedJob.jobNumber})`}</DialogTitle>
@@ -442,9 +472,11 @@ export default function AdminJobsPage() {
               <FormField control={form.control} name="notes" render={({ field }) => (
                 <FormItem> <FormLabel>Customer Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Notes visible to the customer..." {...field} value={field.value ?? ""} /></FormControl> <FormMessage /> </FormItem>
               )} />
-              <FormField control={form.control} name="internalNotes" render={({ field }) => (
-                <FormItem> <FormLabel>Internal Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Internal notes for staff and technicians..." {...field} value={field.value ?? ""} /></FormControl> <FormMessage /> </FormItem>
-              )} />
+              {canManageJobs && // Internal notes only for admins
+                <FormField control={form.control} name="internalNotes" render={({ field }) => (
+                  <FormItem> <FormLabel>Internal Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Internal notes for staff and technicians..." {...field} value={field.value ?? ""} /></FormControl> <FormMessage /> </FormItem>
+                )} />
+              }
 
               <DialogFooter className="pt-4">
                 <Button type="button" variant="outline" onClick={() => {setIsFormDialogOpen(false); setSelectedJob(null);}}>Cancel</Button>
@@ -491,7 +523,7 @@ export default function AdminJobsPage() {
                   <p className="bg-muted/30 p-3 rounded-md whitespace-pre-wrap">{selectedJob.notes}</p>
                 </div>
               )}
-              {selectedJob.internalNotes && (
+              {canManageJobs && selectedJob.internalNotes && ( // Internal notes only for admins
                 <div>
                   <h4 className="font-semibold text-muted-foreground mb-1">Internal Notes:</h4>
                   <p className="bg-muted/30 p-3 rounded-md whitespace-pre-wrap">{selectedJob.internalNotes}</p>
@@ -501,8 +533,8 @@ export default function AdminJobsPage() {
           )}
           <DialogFooter className="pt-4">
             <Button variant="outline" onClick={() => setIsViewDialogOpen(false)}>Close</Button>
-            {canManageJobs && 
-              <Button onClick={() => { if(selectedJob) { setIsViewDialogOpen(false); handleOpenFormDialog(selectedJob); } }}>
+            {canManageJobs && selectedJob &&
+              <Button onClick={() => { setIsViewDialogOpen(false); handleOpenFormDialog(selectedJob); }}>
                   <Edit className="mr-2 h-4 w-4" /> Edit Job
               </Button>
             }
@@ -534,8 +566,12 @@ export default function AdminJobsPage() {
 
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Job Management</h1>
-          <p className="text-muted-foreground">Oversee and manage all service jobs.</p>
+          <h1 className="text-3xl font-bold tracking-tight">
+            {userProfile?.role === 'admin' ? "Job Management" : "My Assigned Jobs"}
+          </h1>
+          <p className="text-muted-foreground">
+            {userProfile?.role === 'admin' ? "Oversee and manage all service jobs." : "View and manage your assigned service jobs."}
+          </p>
         </div>
       </div>
       
@@ -543,9 +579,11 @@ export default function AdminJobsPage() {
         <CardHeader>
           <CardTitle className="flex items-center">
             <Wrench className="mr-2 h-5 w-5 text-primary" />
-            Current Jobs ({jobs.length})
+            {userProfile?.role === 'admin' ? `Current Jobs (${jobs.length})` : `My Jobs (${jobs.length})`}
           </CardTitle>
-          <CardDescription>Browse and manage all service jobs in the system.</CardDescription>
+          <CardDescription>
+            {userProfile?.role === 'admin' ? "Browse and manage all service jobs in the system." : "Details of jobs assigned to you."}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {isLoading ? (
@@ -559,7 +597,9 @@ export default function AdminJobsPage() {
                   <tr>
                     <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Job #</th>
                     <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Customer</th>
-                    <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Technician</th>
+                    {userProfile?.role === 'admin' && // Only show technician column to admin
+                      <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Technician</th>
+                    }
                     <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Scheduled Date</th>
                     <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Status</th>
                     <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-muted-foreground uppercase tracking-wider">Actions</th>
@@ -570,7 +610,9 @@ export default function AdminJobsPage() {
                     <tr key={job.id} className="hover:bg-muted/30 transition-colors">
                       <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-primary">{job.jobNumber}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm">{job.customerName}</td>
-                      <td className="px-4 py-3 whitespace-nowrap text-sm">{job.technicianName || "N/A"}</td>
+                      {userProfile?.role === 'admin' &&
+                        <td className="px-4 py-3 whitespace-nowrap text-sm">{job.technicianName || "N/A"}</td>
+                      }
                       <td className="px-4 py-3 whitespace-nowrap text-sm text-muted-foreground">{job.scheduledDate ? format(job.scheduledDate.toDate(), "PP") : 'N/A'}</td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <Badge variant={getStatusBadgeVariant(job.status)}>{job.status}</Badge>
@@ -583,6 +625,7 @@ export default function AdminJobsPage() {
                           <Button variant="destructive" size="sm" onClick={() => handleDeleteJob(job)}><Trash2 className="mr-1 h-3 w-3" /> Delete</Button>
                           </>
                         )}
+                         {/* Technicians might have specific actions here later, e.g., "Update Status" */}
                       </td>
                     </tr>
                   ))}
@@ -594,6 +637,7 @@ export default function AdminJobsPage() {
               <Wrench className="mx-auto h-12 w-12 text-muted-foreground" />
               <p className="mt-2 text-sm font-medium text-muted-foreground">No jobs found.</p>
               {canManageJobs && <p className="mt-1 text-xs text-muted-foreground">Click "Create New Job" to get started.</p>}
+              {userProfile?.role === 'technician' && <p className="mt-1 text-xs text-muted-foreground">You currently have no jobs assigned to you.</p>}
             </div>
           )}
         </CardContent>
@@ -601,3 +645,4 @@ export default function AdminJobsPage() {
     </div>
   );
 }
+
