@@ -10,7 +10,7 @@ import * as z from "zod";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Building, PlusCircle, Edit, Eye, Mail, Phone, User, Briefcase as LeadSourceIcon } from "lucide-react";
+import { Building, PlusCircle, Edit, Eye, Mail, Phone, User, Briefcase as LeadSourceIcon, Loader2 } from "lucide-react";
 import Image from "next/image";
 import {
   Dialog,
@@ -32,68 +32,31 @@ import {
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { db } from "@/lib/firebase/config";
+import { collection, addDoc, getDocs, Timestamp, query, orderBy } from "firebase/firestore";
+import { format } from "date-fns";
 
 // Define Lead Status type
 type LeadStatus = "New" | "Contacted" | "Qualified" | "Lost";
-
-// Mock data for leads - this will now be initial state
-const initialLeads = [
-  { 
-    id: "1", 
-    companyName: "Innovatech Solutions", 
-    contactName: "Alex Green", 
-    email: "alex.g@innovatech.com", 
-    phone: "555-0101", 
-    status: "New" as LeadStatus, 
-    source: "Website Inquiry", 
-    dateAdded: "2024-07-15", 
-    logoUrl: "https://placehold.co/40x40.png?text=IS",
-    dataAiHint: "company logo" 
-  },
-  { 
-    id: "2", 
-    companyName: "Quantum Dynamics", 
-    contactName: "Brenda Miles", 
-    email: "b.miles@quantumdyn.com", 
-    phone: "555-0102", 
-    status: "Contacted" as LeadStatus, 
-    source: "Referral", 
-    dateAdded: "2024-07-10", 
-    logoUrl: "https://placehold.co/40x40.png?text=QD",
-    dataAiHint: "technology firm"
-  },
-  { 
-    id: "3", 
-    companyName: "Synergy Corp", 
-    contactName: "Carl Davis", 
-    email: "carl.d@synergy.org", 
-    phone: "555-0103", 
-    status: "Qualified" as LeadStatus, 
-    source: "Trade Show", 
-    dateAdded: "2024-06-20", 
-    logoUrl: "https://placehold.co/40x40.png?text=SC",
-    dataAiHint: "business building"
-  },
-];
 
 interface Lead {
   id: string;
   companyName: string;
   contactName: string;
   email: string;
-  phone: string;
+  phone?: string;
   status: LeadStatus;
   source: string;
-  dateAdded: string;
-  logoUrl: string;
-  dataAiHint: string;
+  dateAdded: Timestamp; // Changed to Timestamp
+  logoUrl?: string; // Made optional, can be generated or stored
+  dataAiHint?: string; // Made optional
 }
 
 const leadSchema = z.object({
   companyName: z.string().min(2, "Company name must be at least 2 characters."),
   contactName: z.string().min(2, "Contact name must be at least 2 characters."),
   email: z.string().email("Invalid email address."),
-  phone: z.string().min(10, "Phone number seems too short.").optional(),
+  phone: z.string().min(10, "Phone number seems too short.").optional().or(z.literal("")),
   status: z.enum(["New", "Contacted", "Qualified", "Lost"]),
   source: z.string().min(2, "Source must be at least 2 characters."),
 });
@@ -119,7 +82,8 @@ export default function AdminLeadsPage() {
   const router = useRouter();
   const { toast } = useToast();
 
-  const [leads, setLeads] = useState<Lead[]>(initialLeads);
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [isLoadingLeads, setIsLoadingLeads] = useState(true);
   const [isAddLeadDialogOpen, setIsAddLeadDialogOpen] = useState(false);
 
   useEffect(() => {
@@ -127,6 +91,34 @@ export default function AdminLeadsPage() {
       router.push("/dashboard"); 
     }
   }, [userProfile, authLoading, router]);
+
+  useEffect(() => {
+    if (userProfile?.role === "admin") {
+      const fetchLeads = async () => {
+        setIsLoadingLeads(true);
+        try {
+          const leadsCollectionRef = collection(db, "leads");
+          const q = query(leadsCollectionRef, orderBy("dateAdded", "desc"));
+          const querySnapshot = await getDocs(q);
+          const fetchedLeads = querySnapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+          } as Lead));
+          setLeads(fetchedLeads);
+        } catch (error) {
+          console.error("Error fetching leads: ", error);
+          toast({
+            title: "Error",
+            description: "Failed to fetch leads from Firestore.",
+            variant: "destructive",
+          });
+        } finally {
+          setIsLoadingLeads(false);
+        }
+      };
+      fetchLeads();
+    }
+  }, [userProfile, toast]);
 
   const form = useForm<z.infer<typeof leadSchema>>({
     resolver: zodResolver(leadSchema),
@@ -141,25 +133,43 @@ export default function AdminLeadsPage() {
   });
 
   async function onAddLeadSubmit(values: z.infer<typeof leadSchema>) {
-    const newLead: Lead = {
-      id: (leads.length + 1).toString(), // Simple ID generation for mock data
-      ...values,
-      status: values.status as LeadStatus,
-      dateAdded: new Date().toISOString().split("T")[0], // Today's date
-      logoUrl: `https://placehold.co/40x40.png?text=${values.companyName.substring(0,2).toUpperCase()}`,
-      dataAiHint: "company logo", // Generic hint for new leads
-    };
-    setLeads(prevLeads => [newLead, ...prevLeads]);
-    toast({
-      title: "Lead Added",
-      description: `${values.companyName} has been successfully added.`,
-    });
-    form.reset();
-    setIsAddLeadDialogOpen(false);
+    try {
+      const newLeadData = {
+        ...values,
+        status: values.status as LeadStatus,
+        dateAdded: Timestamp.now(),
+        logoUrl: `https://placehold.co/40x40.png?text=${values.companyName.substring(0,2).toUpperCase()}`,
+        dataAiHint: "company logo",
+      };
+      
+      const leadsCollectionRef = collection(db, "leads");
+      const docRef = await addDoc(leadsCollectionRef, newLeadData);
+      
+      setLeads(prevLeads => [{ id: docRef.id, ...newLeadData }, ...prevLeads]);
+      
+      toast({
+        title: "Lead Added",
+        description: `${values.companyName} has been successfully added to Firestore.`,
+      });
+      form.reset();
+      setIsAddLeadDialogOpen(false);
+    } catch (error) {
+      console.error("Error adding lead to Firestore: ", error);
+      toast({
+        title: "Error",
+        description: "Failed to add lead. Please try again.",
+        variant: "destructive",
+      });
+    }
   }
 
   if (authLoading || userProfile?.role !== "admin") {
-    return <p>Loading lead management or checking admin privileges...</p>;
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <p className="ml-2">Loading lead management or checking admin privileges...</p>
+      </div>
+    );
   }
 
   return (
@@ -294,7 +304,7 @@ export default function AdminLeadsPage() {
                     Cancel
                   </Button>
                   <Button type="submit" disabled={form.formState.isSubmitting}>
-                    {form.formState.isSubmitting ? "Saving..." : "Save Lead"}
+                    {form.formState.isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : "Save Lead"}
                   </Button>
                 </DialogFooter>
               </form>
@@ -314,18 +324,23 @@ export default function AdminLeadsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {leads.length > 0 ? (
+          {isLoadingLeads ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              <p className="ml-2">Loading leads...</p>
+            </div>
+          ) : leads.length > 0 ? (
             <ul className="space-y-4">
               {leads.map((lead) => (
                 <li key={lead.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors gap-4 sm:gap-0">
                   <div className="flex items-center space-x-4">
                     <Image 
-                      src={lead.logoUrl} 
+                      src={lead.logoUrl || `https://placehold.co/40x40.png?text=${lead.companyName.substring(0,2).toUpperCase()}`} 
                       alt={lead.companyName} 
                       width={40} 
                       height={40} 
                       className="rounded-md object-contain" 
-                      data-ai-hint={lead.dataAiHint}
+                      data-ai-hint={lead.dataAiHint || "company logo"}
                     />
                     <div>
                       <p className="font-semibold text-primary">{lead.companyName}</p>
@@ -336,12 +351,13 @@ export default function AdminLeadsPage() {
                   <div className="flex flex-col sm:items-end sm:space-y-1 w-full sm:w-auto mt-3 sm:mt-0">
                      <Badge variant={getStatusBadgeVariant(lead.status)} className="mb-1 sm:mb-0 self-start sm:self-auto">{lead.status}</Badge>
                      <p className="text-xs text-muted-foreground">Source: {lead.source}</p>
-                     <p className="text-xs text-muted-foreground">Added: {lead.dateAdded}</p>
+                     <p className="text-xs text-muted-foreground">Added: {lead.dateAdded ? format(lead.dateAdded.toDate(), "PP") : 'N/A'}</p>
                      <div className="flex space-x-2 mt-2 sm:mt-1 self-start sm:self-auto">
-                        <Button variant="outline" size="sm">
+                        {/* TODO: Implement View/Edit functionality */}
+                        <Button variant="outline" size="sm" disabled> 
                             <Eye className="mr-1 h-3 w-3" /> View
                         </Button>
-                        <Button variant="outline" size="sm">
+                        <Button variant="outline" size="sm" disabled>
                             <Edit className="mr-1 h-3 w-3" /> Edit
                         </Button>
                      </div>
@@ -361,3 +377,4 @@ export default function AdminLeadsPage() {
     </div>
   );
 }
+
