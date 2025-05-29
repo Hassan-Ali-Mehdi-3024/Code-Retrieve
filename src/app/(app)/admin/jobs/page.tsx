@@ -10,7 +10,7 @@ import * as z from "zod";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Wrench, PlusCircle, Eye, Edit, Trash2, User, CalendarDays, ListOrdered, Loader2, Search, Building, UserCheck } from "lucide-react";
+import { Wrench, PlusCircle, Eye, Edit, Trash2, User, CalendarDays, ListOrdered, Loader2, Search, Building, UserCheck, Save } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -42,6 +42,8 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
+import { Select as ShadSelect, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase/config";
@@ -61,6 +63,8 @@ interface Technician extends UserProfile {
 }
 
 type JobStatus = "Pending Schedule" | "Scheduled" | "Dispatched" | "In Progress" | "On Hold" | "Completed" | "Cancelled" | "Requires Follow-up";
+
+const ALL_JOB_STATUSES: JobStatus[] = ["Pending Schedule", "Scheduled", "Dispatched", "In Progress", "On Hold", "Completed", "Cancelled", "Requires Follow-up"];
 
 interface Job {
   id: string;
@@ -85,7 +89,7 @@ const jobSchema = z.object({
   customerId: z.string().min(1, "Customer is required."),
   assignedTechnicianId: z.string().optional().nullable(),
   description: z.string().min(5, "Description must be at least 5 characters."),
-  status: z.enum(["Pending Schedule", "Scheduled", "Dispatched", "In Progress", "On Hold", "Completed", "Cancelled", "Requires Follow-up"]),
+  status: z.enum(ALL_JOB_STATUSES),
   scheduledDate: z.date().optional().nullable(),
   completionDate: z.date().optional().nullable(),
   notes: z.string().optional().nullable(),
@@ -93,16 +97,23 @@ const jobSchema = z.object({
   estimateId: z.string().optional().nullable(),
 });
 
+// Schema for technician status update
+const technicianJobUpdateSchema = z.object({
+    status: z.enum(ALL_JOB_STATUSES),
+    notes: z.string().optional().nullable(), // Technician might add notes when updating status
+});
+
+
 const getStatusBadgeVariant = (status: JobStatus) => {
   switch (status) {
     case "Pending Schedule": return "secondary";
     case "Scheduled": return "default";
     case "Dispatched": return "outline";
-    case "In Progress": return "default"; // consider a specific color
+    case "In Progress": return "default"; 
     case "On Hold": return "secondary";
-    case "Completed": return "outline"; // success variant
+    case "Completed": return "outline"; 
     case "Cancelled": return "destructive";
-    case "Requires Follow-up": return "destructive"; // or warning
+    case "Requires Follow-up": return "destructive"; 
     default: return "default";
   }
 };
@@ -111,8 +122,6 @@ const generateJobNumber = async (): Promise<string> => {
   const prefix = "JOB-";
   const datePart = format(new Date(), "yyyyMMdd");
   const jobsRef = collection(db, "jobs");
-  // A more robust counter would involve a server-side transaction or a dedicated counter document.
-  // For simplicity, we'll count existing jobs for the day.
   const todayStart = new Timestamp(Math.floor(new Date().setHours(0,0,0,0) / 1000), 0);
   const q = query(jobsRef, where("dateCreated", ">=", todayStart));
 
@@ -137,6 +146,8 @@ export default function AdminJobsPage() {
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [jobToDelete, setJobToDelete] = useState<Job | null>(null);
 
+  const canManageJobs = userProfile?.role === "admin";
+
   useEffect(() => {
     if (!authLoading && userProfile && !["admin", "technician"].includes(userProfile.role)) {
       router.push("/dashboard");
@@ -144,7 +155,6 @@ export default function AdminJobsPage() {
   }, [userProfile, authLoading, router]);
 
   const fetchCustomers = useCallback(async () => {
-    // Only admins need full customer list for creating jobs
     if (userProfile?.role !== 'admin') {
       setCustomers([]);
       return;
@@ -162,7 +172,6 @@ export default function AdminJobsPage() {
   }, [toast, userProfile]);
 
   const fetchTechnicians = useCallback(async () => {
-     // Only admins need full technician list for assigning jobs
     if (userProfile?.role !== 'admin') {
       setTechnicians([]);
       return;
@@ -171,7 +180,7 @@ export default function AdminJobsPage() {
       const usersCollectionRef = collection(db, "users");
       const q = query(usersCollectionRef, where("role", "==", "technician"), orderBy("displayName", "asc"));
       const querySnapshot = await getDocs(q);
-      const fetchedTechnicians = querySnapshot.docs.map(doc => ({ id: doc.id, uid: doc.id, ...doc.data() } as Technician)); // Ensure uid is mapped from doc.id for Technician type
+      const fetchedTechnicians = querySnapshot.docs.map(doc => ({ id: doc.id, uid: doc.id, ...doc.data() } as Technician));
       setTechnicians(fetchedTechnicians);
     } catch (error) {
       console.error("Error fetching technicians: ", error);
@@ -190,9 +199,9 @@ export default function AdminJobsPage() {
       if (userProfile.role === 'admin') {
         q = query(jobsCollectionRef, orderBy("dateCreated", "desc"));
       } else if (userProfile.role === 'technician') {
-        q = query(jobsCollectionRef, where("assignedTechnicianId", "==", userProfile.uid), orderBy("dateCreated", "desc"));
+        q = query(jobsCollectionRef, where("assignedTechnicianId", "==", userProfile.uid), orderBy("scheduledDate", "desc"), orderBy("dateCreated", "desc"));
       } else {
-        setJobs([]); // Should not happen due to page-level role check
+        setJobs([]); 
         setIsLoading(false);
         return;
       }
@@ -210,13 +219,15 @@ export default function AdminJobsPage() {
 
   useEffect(() => {
     if (userProfile && ["admin", "technician"].includes(userProfile.role)) {
-      fetchCustomers();
-      fetchTechnicians();
+      if(canManageJobs) {
+        fetchCustomers();
+        fetchTechnicians();
+      }
       fetchJobs();
     }
-  }, [userProfile, fetchCustomers, fetchTechnicians, fetchJobs]);
+  }, [userProfile, fetchCustomers, fetchTechnicians, fetchJobs, canManageJobs]);
 
-  const form = useForm<z.infer<typeof jobSchema>>({
+  const adminForm = useForm<z.infer<typeof jobSchema>>({
     resolver: zodResolver(jobSchema),
     defaultValues: {
       customerId: "",
@@ -231,8 +242,17 @@ export default function AdminJobsPage() {
     },
   });
 
-  async function onSubmit(values: z.infer<typeof jobSchema>) {
-    if (userProfile?.role !== 'admin') {
+  const technicianUpdateForm = useForm<z.infer<typeof technicianJobUpdateSchema>>({
+    resolver: zodResolver(technicianJobUpdateSchema),
+    defaultValues: {
+        status: "Pending Schedule",
+        notes: "",
+    }
+  });
+
+
+  async function onAdminSubmit(values: z.infer<typeof jobSchema>) {
+    if (!canManageJobs) {
         toast({ title: "Unauthorized", description: "Only admins can create or edit jobs here.", variant: "destructive" });
         return;
     }
@@ -246,7 +266,7 @@ export default function AdminJobsPage() {
       }
       const selectedTechnicianDoc = values.assignedTechnicianId ? technicians.find(t => t.uid === values.assignedTechnicianId) : null;
 
-      const jobDataForDb = {
+      const jobDataForDb: Partial<Job> = {
         customerId: selectedCustomerDoc.id,
         customerName: selectedCustomerDoc.companyName,
         customerEmail: selectedCustomerDoc.email || undefined,
@@ -255,15 +275,16 @@ export default function AdminJobsPage() {
         description: values.description,
         status: values.status,
         scheduledDate: values.scheduledDate ? Timestamp.fromDate(values.scheduledDate) : null,
-        completionDate: values.completionDate ? Timestamp.fromDate(values.completionDate) : null,
+        completionDate: values.status === "Completed" && !values.completionDate ? serverTimestamp() as Timestamp : (values.completionDate ? Timestamp.fromDate(values.completionDate) : null),
         notes: values.notes || null,
         internalNotes: values.internalNotes || null,
         estimateId: values.estimateId || null,
+        lastUpdated: serverTimestamp() as Timestamp,
       };
 
       if (selectedJob) { // Editing
         const jobDocRef = doc(db, "jobs", selectedJob.id);
-        await updateDoc(jobDocRef, { ...jobDataForDb, lastUpdated: serverTimestamp() as Timestamp }); 
+        await updateDoc(jobDocRef, jobDataForDb); 
         toast({ title: "Job Updated", description: `Job ${selectedJob.jobNumber} has been updated.` });
       } else { // Adding
         const jobNumber = await generateJobNumber();
@@ -271,14 +292,13 @@ export default function AdminJobsPage() {
             ...jobDataForDb,
             jobNumber,
             dateCreated: serverTimestamp() as Timestamp,
-            lastUpdated: serverTimestamp() as Timestamp,
         }
         const jobsCollectionRef = collection(db, "jobs");
         await addDoc(jobsCollectionRef, newJobData);
         toast({ title: "Job Created", description: `Job ${jobNumber} has been created.` });
       }
       
-      form.reset();
+      adminForm.reset();
       setIsFormDialogOpen(false);
       setSelectedJob(null);
       fetchJobs();
@@ -291,10 +311,10 @@ export default function AdminJobsPage() {
   }
   
   const handleOpenFormDialog = (jobToEdit?: Job) => {
-    if (userProfile?.role !== 'admin') return; // Only admins can open the form dialog
+    if (!canManageJobs) return; 
     setSelectedJob(jobToEdit || null);
     if (jobToEdit) {
-      form.reset({
+      adminForm.reset({
         customerId: jobToEdit.customerId,
         assignedTechnicianId: jobToEdit.assignedTechnicianId || "",
         description: jobToEdit.description,
@@ -306,7 +326,7 @@ export default function AdminJobsPage() {
         estimateId: jobToEdit.estimateId || "",
       });
     } else {
-      form.reset({ 
+      adminForm.reset({ 
         customerId: "",
         assignedTechnicianId: "",
         description: "",
@@ -323,16 +343,55 @@ export default function AdminJobsPage() {
 
   const handleViewJob = (job: Job) => {
     setSelectedJob(job);
+    if (userProfile?.role === 'technician') {
+        technicianUpdateForm.reset({
+            status: job.status,
+            notes: job.notes || "",
+        });
+    }
     setIsViewDialogOpen(true);
   };
 
+  const handleTechnicianStatusUpdate = async (values: z.infer<typeof technicianJobUpdateSchema>) => {
+    if (!selectedJob || userProfile?.role !== 'technician' || selectedJob.assignedTechnicianId !== userProfile.uid) {
+        toast({ title: "Error", description: "Cannot update this job.", variant: "destructive" });
+        return;
+    }
+    setIsSubmitting(true);
+    try {
+        const jobDocRef = doc(db, "jobs", selectedJob.id);
+        const updateData: Partial<Job> = {
+            status: values.status,
+            notes: values.notes || null,
+            lastUpdated: serverTimestamp() as Timestamp,
+        };
+        if (values.status === "Completed" && selectedJob.status !== "Completed") {
+            updateData.completionDate = serverTimestamp() as Timestamp;
+        }
+
+        await updateDoc(jobDocRef, updateData);
+        toast({ title: "Job Status Updated", description: `Status for job ${selectedJob.jobNumber} updated to ${values.status}.`});
+        
+        // Optimistically update local state or refetch
+        setJobs(prevJobs => prevJobs.map(j => j.id === selectedJob.id ? {...j, ...updateData, lastUpdated: Timestamp.now(), completionDate: values.status === "Completed" ? Timestamp.now() : j.completionDate } : j ));
+        setSelectedJob(prev => prev ? {...prev, ...updateData, lastUpdated: Timestamp.now(), completionDate: values.status === "Completed" ? Timestamp.now() : prev.completionDate } : null);
+
+    } catch (error) {
+        console.error("Error updating job status by technician:", error);
+        toast({ title: "Update Error", description: "Failed to update job status.", variant: "destructive" });
+    } finally {
+        setIsSubmitting(false);
+    }
+  };
+
+
   const handleDeleteJob = (job: Job) => {
-    if (userProfile?.role !== 'admin') return;
+    if (!canManageJobs) return;
     setJobToDelete(job);
   };
 
   async function confirmDeleteJob() {
-    if (!jobToDelete || userProfile?.role !== 'admin') return;
+    if (!jobToDelete || !canManageJobs) return;
     setIsSubmitting(true);
     try {
       const jobDocRef = doc(db, "jobs", jobToDelete.id);
@@ -352,24 +411,18 @@ export default function AdminJobsPage() {
     return <div className="flex h-screen items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="ml-2">Loading...</p></div>;
   }
   if (!["admin", "technician"].includes(userProfile.role)) {
-    // This check should be redundant due to the useEffect redirect, but good as a fallback.
     return <div className="flex h-screen items-center justify-center"><p>Access Denied.</p></div>;
   }
   
-  const canManageJobs = userProfile.role === "admin";
-
-
   return (
     <div className="space-y-6">
+      {canManageJobs && (
       <Dialog open={isFormDialogOpen} onOpenChange={(isOpen) => { setIsFormDialogOpen(isOpen); if (!isOpen) setSelectedJob(null); }}>
-        {/* DialogTrigger is only shown to admins */}
-        {canManageJobs && (
-            <DialogTrigger asChild>
-                <Button onClick={() => handleOpenFormDialog()}>
-                <PlusCircle className="mr-2 h-4 w-4" /> Create New Job
-                </Button>
-            </DialogTrigger>
-        )}
+        <DialogTrigger asChild>
+            <Button onClick={() => handleOpenFormDialog()}>
+            <PlusCircle className="mr-2 h-4 w-4" /> Create New Job
+            </Button>
+        </DialogTrigger>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{selectedJob ? "Edit Job" : "Create New Job"} {selectedJob?.jobNumber && `(${selectedJob.jobNumber})`}</DialogTitle>
@@ -377,9 +430,9 @@ export default function AdminJobsPage() {
               {selectedJob ? "Update the details for this job." : "Fill in the details to create a new job."}
             </DialogDescription>
           </DialogHeader>
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 py-2 max-h-[80vh] overflow-y-auto pr-2">
-              <FormField control={form.control} name="customerId" render={({ field }) => (
+          <Form {...adminForm}>
+            <form onSubmit={adminForm.handleSubmit(onAdminSubmit)} className="space-y-4 py-2 max-h-[80vh] overflow-y-auto pr-2">
+              <FormField control={adminForm.control} name="customerId" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Customer</FormLabel>
                   <FormControl>
@@ -392,7 +445,7 @@ export default function AdminJobsPage() {
                       </PopoverTrigger>
                       <PopoverContent className="w-[--radix-popover-trigger-width] max-h-[300px] overflow-y-auto p-0">
                         {customers.map(customer => (
-                          <div key={customer.id} onClick={() => {form.setValue("customerId", customer.id, {shouldValidate: true}); (document.activeElement as HTMLElement)?.blur(); }}
+                          <div key={customer.id} onClick={() => {adminForm.setValue("customerId", customer.id, {shouldValidate: true}); (document.activeElement as HTMLElement)?.blur(); }}
                                className="cursor-pointer p-2 hover:bg-accent hover:text-accent-foreground">
                             {customer.companyName} ({customer.contactName})
                           </div>
@@ -405,7 +458,7 @@ export default function AdminJobsPage() {
                 </FormItem>
               )} />
 
-              <FormField control={form.control} name="assignedTechnicianId" render={({ field }) => (
+              <FormField control={adminForm.control} name="assignedTechnicianId" render={({ field }) => (
                 <FormItem>
                   <FormLabel>Assign Technician (Optional)</FormLabel>
                   <FormControl>
@@ -417,12 +470,12 @@ export default function AdminJobsPage() {
                         </Button>
                       </PopoverTrigger>
                       <PopoverContent className="w-[--radix-popover-trigger-width] max-h-[300px] overflow-y-auto p-0">
-                        <div onClick={() => {form.setValue("assignedTechnicianId", null, {shouldValidate: true}); (document.activeElement as HTMLElement)?.blur(); }}
+                        <div onClick={() => {adminForm.setValue("assignedTechnicianId", null, {shouldValidate: true}); (document.activeElement as HTMLElement)?.blur(); }}
                              className="cursor-pointer p-2 hover:bg-accent hover:text-accent-foreground text-muted-foreground italic">
                             None
                         </div>
                         {technicians.map(tech => (
-                          <div key={tech.uid} onClick={() => {form.setValue("assignedTechnicianId", tech.uid, {shouldValidate: true}); (document.activeElement as HTMLElement)?.blur(); }}
+                          <div key={tech.uid} onClick={() => {adminForm.setValue("assignedTechnicianId", tech.uid, {shouldValidate: true}); (document.activeElement as HTMLElement)?.blur(); }}
                                className="cursor-pointer p-2 hover:bg-accent hover:text-accent-foreground">
                             {tech.displayName}
                           </div>
@@ -435,19 +488,26 @@ export default function AdminJobsPage() {
                 </FormItem>
               )} />
               
-              <FormField control={form.control} name="description" render={({ field }) => (
+              <FormField control={adminForm.control} name="description" render={({ field }) => (
                 <FormItem> <FormLabel>Job Description</FormLabel> <FormControl><Textarea placeholder="Detailed description of the work to be done..." {...field} /></FormControl> <FormMessage /> </FormItem>
               )} />
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <FormField control={form.control} name="status" render={({ field }) => (
+                <FormField control={adminForm.control} name="status" render={({ field }) => (
                     <FormItem> <FormLabel>Status</FormLabel> 
-                        <select onChange={field.onChange} value={field.value} className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
-                            {(["Pending Schedule", "Scheduled", "Dispatched", "In Progress", "On Hold", "Completed", "Cancelled", "Requires Follow-up"] as JobStatus[]).map(s => <option key={s} value={s}>{s}</option>)}
-                        </select>
+                        <ShadSelect onValueChange={field.onChange} value={field.value}>
+                            <FormControl>
+                                <SelectTrigger>
+                                    <SelectValue placeholder="Select job status" />
+                                </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                                {ALL_JOB_STATUSES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                            </SelectContent>
+                        </ShadSelect>
                     <FormMessage /> </FormItem>
                 )} />
-                <FormField control={form.control} name="scheduledDate" render={({ field }) => (
+                <FormField control={adminForm.control} name="scheduledDate" render={({ field }) => (
                   <FormItem className="flex flex-col">
                     <FormLabel>Scheduled Date (Optional)</FormLabel>
                     <Popover>
@@ -467,13 +527,13 @@ export default function AdminJobsPage() {
                   </FormItem>
                 )} />
               </div>
-               <FormField control={form.control} name="estimateId" render={({ field }) => ( <FormItem> <FormLabel>Related Estimate ID (Optional)</FormLabel> <FormControl><Input placeholder="e.g., EST-20230101-001" {...field} value={field.value ?? ""} /></FormControl> <FormMessage /> </FormItem> )} />
+               <FormField control={adminForm.control} name="estimateId" render={({ field }) => ( <FormItem> <FormLabel>Related Estimate ID (Optional)</FormLabel> <FormControl><Input placeholder="e.g., EST-20230101-001" {...field} value={field.value ?? ""} /></FormControl> <FormMessage /> </FormItem> )} />
 
-              <FormField control={form.control} name="notes" render={({ field }) => (
+              <FormField control={adminForm.control} name="notes" render={({ field }) => (
                 <FormItem> <FormLabel>Customer Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Notes visible to the customer..." {...field} value={field.value ?? ""} /></FormControl> <FormMessage /> </FormItem>
               )} />
-              {canManageJobs && // Internal notes only for admins
-                <FormField control={form.control} name="internalNotes" render={({ field }) => (
+              {canManageJobs &&
+                <FormField control={adminForm.control} name="internalNotes" render={({ field }) => (
                   <FormItem> <FormLabel>Internal Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Internal notes for staff and technicians..." {...field} value={field.value ?? ""} /></FormControl> <FormMessage /> </FormItem>
                 )} />
               }
@@ -488,6 +548,7 @@ export default function AdminJobsPage() {
           </Form>
         </DialogContent>
       </Dialog>
+      )}
 
       <Dialog open={isViewDialogOpen} onOpenChange={(isOpen) => { setIsViewDialogOpen(isOpen); if (!isOpen) setSelectedJob(null); }}>
         <DialogContent className="sm:max-w-lg">
@@ -517,15 +578,60 @@ export default function AdminJobsPage() {
                 <p className="bg-muted/30 p-3 rounded-md whitespace-pre-wrap">{selectedJob.description}</p>
               </div>
 
-              {selectedJob.notes && (
+              {userProfile?.role === 'technician' && selectedJob.assignedTechnicianId === userProfile.uid && (
+                 <Form {...technicianUpdateForm}>
+                    <form onSubmit={technicianUpdateForm.handleSubmit(handleTechnicianStatusUpdate)} className="space-y-3 pt-3 border-t">
+                         <h4 className="font-semibold text-muted-foreground">Update Job Status</h4>
+                         <FormField
+                            control={technicianUpdateForm.control}
+                            name="status"
+                            render={({ field }) => (
+                                <FormItem>
+                                <FormLabel>New Status</FormLabel>
+                                <ShadSelect onValueChange={field.onChange} defaultValue={field.value}>
+                                    <FormControl>
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Select new status" />
+                                        </SelectTrigger>
+                                    </FormControl>
+                                    <SelectContent>
+                                    {ALL_JOB_STATUSES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                                    </SelectContent>
+                                </ShadSelect>
+                                <FormMessage />
+                                </FormItem>
+                            )}
+                        />
+                        <FormField
+                            control={technicianUpdateForm.control}
+                            name="notes"
+                            render={({ field }) => (
+                                <FormItem>
+                                <FormLabel>Update Notes (Optional)</FormLabel>
+                                <FormControl>
+                                    <Textarea placeholder="Add any notes about this status update..." {...field} value={field.value ?? ""} />
+                                </FormControl>
+                                <FormMessage />
+                                </FormItem>
+                            )}
+                        />
+                        <Button type="submit" disabled={isSubmitting} size="sm">
+                            {isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving Status...</> : <><Save className="mr-2 h-4 w-4" />Save Status Update</>}
+                        </Button>
+                    </form>
+                 </Form>
+              )}
+
+              {selectedJob.notes && (!technicianUpdateForm.getValues("notes") || userProfile?.role === 'admin') && ( // Show original notes if not editing them or if admin
                 <div>
-                  <h4 className="font-semibold text-muted-foreground mb-1">Customer Notes:</h4>
+                  <h4 className="font-semibold text-muted-foreground mb-1 mt-3">Customer Notes:</h4>
                   <p className="bg-muted/30 p-3 rounded-md whitespace-pre-wrap">{selectedJob.notes}</p>
                 </div>
               )}
-              {canManageJobs && selectedJob.internalNotes && ( // Internal notes only for admins
+
+              {canManageJobs && selectedJob.internalNotes && (
                 <div>
-                  <h4 className="font-semibold text-muted-foreground mb-1">Internal Notes:</h4>
+                  <h4 className="font-semibold text-muted-foreground mb-1 mt-3">Internal Notes:</h4>
                   <p className="bg-muted/30 p-3 rounded-md whitespace-pre-wrap">{selectedJob.internalNotes}</p>
                 </div>
               )}
@@ -542,27 +648,29 @@ export default function AdminJobsPage() {
         </DialogContent>
       </Dialog>
       
-      <AlertDialog open={!!jobToDelete} onOpenChange={(open) => !open && setJobToDelete(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This action will permanently delete job '{jobToDelete?.jobNumber}'. This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setJobToDelete(null)}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={confirmDeleteJob}
-              disabled={isSubmitting}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Yes, delete job
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {canManageJobs && (
+        <AlertDialog open={!!jobToDelete} onOpenChange={(open) => !open && setJobToDelete(null)}>
+            <AlertDialogContent>
+            <AlertDialogHeader>
+                <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                <AlertDialogDescription>
+                This action will permanently delete job '{jobToDelete?.jobNumber}'. This cannot be undone.
+                </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+                <AlertDialogCancel onClick={() => setJobToDelete(null)}>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                onClick={confirmDeleteJob}
+                disabled={isSubmitting}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Yes, delete job
+                </AlertDialogAction>
+            </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
+      )}
 
       <div className="flex items-center justify-between">
         <div>
@@ -597,7 +705,7 @@ export default function AdminJobsPage() {
                   <tr>
                     <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Job #</th>
                     <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Customer</th>
-                    {userProfile?.role === 'admin' && // Only show technician column to admin
+                    {userProfile?.role === 'admin' && 
                       <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Technician</th>
                     }
                     <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider">Scheduled Date</th>
@@ -625,7 +733,6 @@ export default function AdminJobsPage() {
                           <Button variant="destructive" size="sm" onClick={() => handleDeleteJob(job)}><Trash2 className="mr-1 h-3 w-3" /> Delete</Button>
                           </>
                         )}
-                         {/* Technicians might have specific actions here later, e.g., "Update Status" */}
                       </td>
                     </tr>
                   ))}
