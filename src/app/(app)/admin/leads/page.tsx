@@ -132,7 +132,7 @@ export default function AdminLeadsPage() {
     if (userProfile?.role === "admin") {
       fetchLeads();
     }
-  }, [userProfile, toast]); // Removed fetchLeads from dependency array as it's stable
+  }, [userProfile]); // Removed toast from dependency, fetchLeads is stable
 
   const form = useForm<z.infer<typeof leadSchema>>({
     resolver: zodResolver(leadSchema),
@@ -156,6 +156,8 @@ export default function AdminLeadsPage() {
       const newLeadData = {
         ...values,
         status: values.status as LeadStatus,
+        phone: values.phone || null, // Store as null if empty string for consistency
+        notes: values.notes || null, // Store as null if empty string
         dateAdded: serverTimestamp(),
         lastUpdated: serverTimestamp(),
         logoUrl: `https://placehold.co/40x40.png?text=${values.companyName.substring(0,2).toUpperCase()}`,
@@ -171,7 +173,7 @@ export default function AdminLeadsPage() {
       });
       form.reset();
       setIsAddLeadDialogOpen(false);
-      fetchLeads(); // Refetch leads to get the new one with server timestamp
+      fetchLeads(); 
     } catch (error) {
       console.error("Error adding lead: ", error);
       toast({
@@ -185,12 +187,12 @@ export default function AdminLeadsPage() {
   const handleEditLead = (lead: Lead) => {
     setSelectedLead(lead);
     editForm.reset({
-        companyName: lead.companyName,
-        contactName: lead.contactName,
-        email: lead.email,
+        companyName: lead.companyName || "",
+        contactName: lead.contactName || "",
+        email: lead.email || "",
         phone: lead.phone || "",
-        status: lead.status,
-        source: lead.source,
+        status: lead.status, // Status should always be defined as per LeadStatus
+        source: lead.source || "",
         notes: lead.notes || "",
     });
     setIsEditLeadDialogOpen(true);
@@ -203,6 +205,8 @@ export default function AdminLeadsPage() {
       await updateDoc(leadDocRef, {
         ...values,
         status: values.status as LeadStatus,
+        phone: values.phone || null,
+        notes: values.notes || null,
         lastUpdated: serverTimestamp(),
       });
       toast({
@@ -211,7 +215,7 @@ export default function AdminLeadsPage() {
       });
       setIsEditLeadDialogOpen(false);
       setSelectedLead(null);
-      fetchLeads(); // Refetch to show updated data
+      fetchLeads(); 
     } catch (error) {
       console.error("Error updating lead: ", error);
       toast({
@@ -234,7 +238,7 @@ export default function AdminLeadsPage() {
       const inquiry = `Lead for ${selectedLead.companyName} (Contact: ${selectedLead.contactName}, Email: ${selectedLead.email}). Source: ${selectedLead.source}. Notes: ${selectedLead.notes || 'N/A'}`;
       const scoreLeadInput: ScoreLeadInput = {
         initialInquiry: inquiry,
-        websiteActivity: "Lead manually entered/managed in CRM.", // Placeholder as we don't track website activity here
+        websiteActivity: "Lead manually entered/managed in CRM.", 
       };
       const scoreOutput: ScoreLeadOutput = await scoreLead(scoreLeadInput);
       
@@ -246,9 +250,13 @@ export default function AdminLeadsPage() {
         lastUpdated: serverTimestamp(),
       });
 
-      // Update local state for immediate UI update
-      setSelectedLead(prev => prev ? {...prev, ...scoreOutput, lastUpdated: Timestamp.now() } : null);
-      setLeads(prevLeads => prevLeads.map(l => l.id === selectedLead.id ? {...l, ...scoreOutput, lastUpdated: Timestamp.now()} : l));
+      const updatedLeadWithScore = {
+        ...selectedLead, 
+        ...scoreOutput, 
+        lastUpdated: Timestamp.now() 
+      };
+      setSelectedLead(updatedLeadWithScore);
+      setLeads(prevLeads => prevLeads.map(l => l.id === selectedLead.id ? updatedLeadWithScore : l));
       
       toast({
         title: "Lead Scored",
@@ -267,7 +275,7 @@ export default function AdminLeadsPage() {
   };
 
 
-  if (authLoading || (!isLoadingLeads && userProfile?.role !== "admin")) {
+  if (authLoading || (!userProfile && !isLoadingLeads)) { // Adjusted loading check
     return (
       <div className="flex h-screen items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -275,13 +283,22 @@ export default function AdminLeadsPage() {
       </div>
     );
   }
+  
+  if (!authLoading && userProfile?.role !== "admin") {
+     return (
+      <div className="flex h-screen items-center justify-center">
+        <p>Access Denied. You must be an admin to view this page.</p>
+      </div>
+    );
+  }
+
 
   return (
     <div className="space-y-6">
       {/* Add Lead Dialog */}
       <Dialog open={isAddLeadDialogOpen} onOpenChange={setIsAddLeadDialogOpen}>
         <DialogTrigger asChild>
-          <Button onClick={() => { form.reset({ status: "New", notes: "" }); setIsAddLeadDialogOpen(true);}}>
+          <Button onClick={() => { form.reset({ companyName: "", contactName: "", email: "", phone: "", status: "New", source: "", notes: "" }); setIsAddLeadDialogOpen(true);}}>
             <PlusCircle className="mr-2 h-4 w-4" /> Add New Lead
           </Button>
         </DialogTrigger>
@@ -499,7 +516,7 @@ export default function AdminLeadsPage() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  {selectedLead.leadScore !== undefined ? (
+                  {selectedLead.leadScore !== undefined && selectedLead.leadScore !== null ? (
                     <div className="space-y-2">
                       <div className="flex items-center">
                         <Star className="h-5 w-5 text-yellow-500 mr-2" />
@@ -525,7 +542,7 @@ export default function AdminLeadsPage() {
           )}
           <DialogFooter className="pt-4">
             <Button variant="outline" onClick={() => setIsViewLeadDialogOpen(false)}>Close</Button>
-             <Button onClick={() => { setIsViewLeadDialogOpen(false); handleEditLead(selectedLead!); }}>
+             <Button onClick={() => { if(selectedLead) { setIsViewLeadDialogOpen(false); handleEditLead(selectedLead); } }}>
                 <Edit className="mr-2 h-4 w-4" /> Edit Lead
             </Button>
           </DialogFooter>
@@ -539,7 +556,6 @@ export default function AdminLeadsPage() {
             Oversee and manage all potential client leads for LuxeFlow.
           </p>
         </div>
-        {/* Trigger moved to top of file */}
       </div>
       
       <Card className="shadow-lg">
@@ -605,5 +621,3 @@ export default function AdminLeadsPage() {
     </div>
   );
 }
-
-    
