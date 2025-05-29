@@ -10,7 +10,7 @@ import * as z from "zod";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Building, PlusCircle, Edit, Eye, Mail, Phone, User, Briefcase as LeadSourceIcon, Loader2 } from "lucide-react";
+import { Building, PlusCircle, Edit, Eye, Mail, Phone, User, Briefcase as LeadSourceIcon, Loader2, BrainCircuit, Star } from "lucide-react";
 import Image from "next/image";
 import {
   Dialog,
@@ -30,11 +30,13 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { db } from "@/lib/firebase/config";
-import { collection, addDoc, getDocs, Timestamp, query, orderBy } from "firebase/firestore";
+import { collection, addDoc, getDocs, Timestamp, query, orderBy, doc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { format } from "date-fns";
+import { scoreLead, type ScoreLeadInput, type ScoreLeadOutput } from "@/ai/flows/lead-scoring";
 
 // Define Lead Status type
 type LeadStatus = "New" | "Contacted" | "Qualified" | "Lost";
@@ -47,9 +49,15 @@ interface Lead {
   phone?: string;
   status: LeadStatus;
   source: string;
-  dateAdded: Timestamp; // Changed to Timestamp
-  logoUrl?: string; // Made optional, can be generated or stored
-  dataAiHint?: string; // Made optional
+  dateAdded: Timestamp;
+  lastUpdated?: Timestamp;
+  logoUrl?: string; 
+  dataAiHint?: string;
+  notes?: string;
+  // AI Scoring fields
+  leadScore?: number;
+  leadScoreReason?: string;
+  isQualified?: boolean;
 }
 
 const leadSchema = z.object({
@@ -59,6 +67,7 @@ const leadSchema = z.object({
   phone: z.string().min(10, "Phone number seems too short.").optional().or(z.literal("")),
   status: z.enum(["New", "Contacted", "Qualified", "Lost"]),
   source: z.string().min(2, "Source must be at least 2 characters."),
+  notes: z.string().optional(),
 });
 
 const getStatusBadgeVariant = (status: LeadStatus) => {
@@ -85,6 +94,10 @@ export default function AdminLeadsPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [isLoadingLeads, setIsLoadingLeads] = useState(true);
   const [isAddLeadDialogOpen, setIsAddLeadDialogOpen] = useState(false);
+  const [isEditLeadDialogOpen, setIsEditLeadDialogOpen] = useState(false);
+  const [isViewLeadDialogOpen, setIsViewLeadDialogOpen] = useState(false);
+  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [isScoringLead, setIsScoringLead] = useState(false);
 
   useEffect(() => {
     if (!authLoading && userProfile?.role !== "admin") {
@@ -92,33 +105,34 @@ export default function AdminLeadsPage() {
     }
   }, [userProfile, authLoading, router]);
 
+  const fetchLeads = async () => {
+    setIsLoadingLeads(true);
+    try {
+      const leadsCollectionRef = collection(db, "leads");
+      const q = query(leadsCollectionRef, orderBy("dateAdded", "desc"));
+      const querySnapshot = await getDocs(q);
+      const fetchedLeads = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as Lead));
+      setLeads(fetchedLeads);
+    } catch (error) {
+      console.error("Error fetching leads: ", error);
+      toast({
+        title: "Error Fetching Leads",
+        description: "Failed to fetch leads from Firestore. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoadingLeads(false);
+    }
+  };
+
   useEffect(() => {
     if (userProfile?.role === "admin") {
-      const fetchLeads = async () => {
-        setIsLoadingLeads(true);
-        try {
-          const leadsCollectionRef = collection(db, "leads");
-          const q = query(leadsCollectionRef, orderBy("dateAdded", "desc"));
-          const querySnapshot = await getDocs(q);
-          const fetchedLeads = querySnapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data()
-          } as Lead));
-          setLeads(fetchedLeads);
-        } catch (error) {
-          console.error("Error fetching leads: ", error);
-          toast({
-            title: "Error",
-            description: "Failed to fetch leads from Firestore.",
-            variant: "destructive",
-          });
-        } finally {
-          setIsLoadingLeads(false);
-        }
-      };
       fetchLeads();
     }
-  }, [userProfile, toast]);
+  }, [userProfile, toast]); // Removed fetchLeads from dependency array as it's stable
 
   const form = useForm<z.infer<typeof leadSchema>>({
     resolver: zodResolver(leadSchema),
@@ -129,7 +143,12 @@ export default function AdminLeadsPage() {
       phone: "",
       status: "New",
       source: "",
+      notes: "",
     },
+  });
+
+  const editForm = useForm<z.infer<typeof leadSchema>>({
+    resolver: zodResolver(leadSchema),
   });
 
   async function onAddLeadSubmit(values: z.infer<typeof leadSchema>) {
@@ -137,43 +156,382 @@ export default function AdminLeadsPage() {
       const newLeadData = {
         ...values,
         status: values.status as LeadStatus,
-        dateAdded: Timestamp.now(),
+        dateAdded: serverTimestamp(),
+        lastUpdated: serverTimestamp(),
         logoUrl: `https://placehold.co/40x40.png?text=${values.companyName.substring(0,2).toUpperCase()}`,
         dataAiHint: "company logo",
       };
       
       const leadsCollectionRef = collection(db, "leads");
-      const docRef = await addDoc(leadsCollectionRef, newLeadData);
-      
-      setLeads(prevLeads => [{ id: docRef.id, ...newLeadData }, ...prevLeads]);
+      await addDoc(leadsCollectionRef, newLeadData);
       
       toast({
         title: "Lead Added",
-        description: `${values.companyName} has been successfully added to Firestore.`,
+        description: `${values.companyName} has been successfully added.`,
       });
       form.reset();
       setIsAddLeadDialogOpen(false);
+      fetchLeads(); // Refetch leads to get the new one with server timestamp
     } catch (error) {
-      console.error("Error adding lead to Firestore: ", error);
+      console.error("Error adding lead: ", error);
       toast({
-        title: "Error",
+        title: "Error Adding Lead",
         description: "Failed to add lead. Please try again.",
         variant: "destructive",
       });
     }
   }
 
-  if (authLoading || userProfile?.role !== "admin") {
+  const handleEditLead = (lead: Lead) => {
+    setSelectedLead(lead);
+    editForm.reset({
+        companyName: lead.companyName,
+        contactName: lead.contactName,
+        email: lead.email,
+        phone: lead.phone || "",
+        status: lead.status,
+        source: lead.source,
+        notes: lead.notes || "",
+    });
+    setIsEditLeadDialogOpen(true);
+  };
+
+  async function onEditLeadSubmit(values: z.infer<typeof leadSchema>) {
+    if (!selectedLead) return;
+    try {
+      const leadDocRef = doc(db, "leads", selectedLead.id);
+      await updateDoc(leadDocRef, {
+        ...values,
+        status: values.status as LeadStatus,
+        lastUpdated: serverTimestamp(),
+      });
+      toast({
+        title: "Lead Updated",
+        description: `${values.companyName} has been successfully updated.`,
+      });
+      setIsEditLeadDialogOpen(false);
+      setSelectedLead(null);
+      fetchLeads(); // Refetch to show updated data
+    } catch (error) {
+      console.error("Error updating lead: ", error);
+      toast({
+        title: "Error Updating Lead",
+        description: "Failed to update lead. Please try again.",
+        variant: "destructive",
+      });
+    }
+  }
+  
+  const handleViewLead = (lead: Lead) => {
+    setSelectedLead(lead);
+    setIsViewLeadDialogOpen(true);
+  };
+
+  const handleScoreLead = async () => {
+    if (!selectedLead) return;
+    setIsScoringLead(true);
+    try {
+      const inquiry = `Lead for ${selectedLead.companyName} (Contact: ${selectedLead.contactName}, Email: ${selectedLead.email}). Source: ${selectedLead.source}. Notes: ${selectedLead.notes || 'N/A'}`;
+      const scoreLeadInput: ScoreLeadInput = {
+        initialInquiry: inquiry,
+        websiteActivity: "Lead manually entered/managed in CRM.", // Placeholder as we don't track website activity here
+      };
+      const scoreOutput: ScoreLeadOutput = await scoreLead(scoreLeadInput);
+      
+      const leadDocRef = doc(db, "leads", selectedLead.id);
+      await updateDoc(leadDocRef, {
+        leadScore: scoreOutput.leadScore,
+        leadScoreReason: scoreOutput.reason,
+        isQualified: scoreOutput.isQualified,
+        lastUpdated: serverTimestamp(),
+      });
+
+      // Update local state for immediate UI update
+      setSelectedLead(prev => prev ? {...prev, ...scoreOutput, lastUpdated: Timestamp.now() } : null);
+      setLeads(prevLeads => prevLeads.map(l => l.id === selectedLead.id ? {...l, ...scoreOutput, lastUpdated: Timestamp.now()} : l));
+      
+      toast({
+        title: "Lead Scored",
+        description: `${selectedLead.companyName} has been scored by AI.`,
+      });
+    } catch (error) {
+      console.error("Error scoring lead with AI: ", error);
+      toast({
+        title: "AI Scoring Error",
+        description: "Failed to score lead using AI. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsScoringLead(false);
+    }
+  };
+
+
+  if (authLoading || (!isLoadingLeads && userProfile?.role !== "admin")) {
     return (
       <div className="flex h-screen items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        <p className="ml-2">Loading lead management or checking admin privileges...</p>
+        <p className="ml-2">Loading or verifying access...</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
+      {/* Add Lead Dialog */}
+      <Dialog open={isAddLeadDialogOpen} onOpenChange={setIsAddLeadDialogOpen}>
+        <DialogTrigger asChild>
+          <Button onClick={() => { form.reset({ status: "New", notes: "" }); setIsAddLeadDialogOpen(true);}}>
+            <PlusCircle className="mr-2 h-4 w-4" /> Add New Lead
+          </Button>
+        </DialogTrigger>
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>Add New Lead</DialogTitle>
+            <DialogDescription>
+              Enter the details for the new lead. Click save when you're done.
+            </DialogDescription>
+          </DialogHeader>
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(onAddLeadSubmit)} className="space-y-4 py-2 max-h-[70vh] overflow-y-auto pr-2">
+              <FormField
+                control={form.control}
+                name="companyName"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Company Name</FormLabel>
+                    <FormControl>
+                      <div className="relative">
+                        <Building className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input placeholder="e.g. Acme Corp" {...field} className="pl-10" />
+                      </div>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="contactName"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Contact Name</FormLabel>
+                    <FormControl>
+                       <div className="relative">
+                        <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input placeholder="e.g. John Doe" {...field} className="pl-10" />
+                      </div>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="email"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Email</FormLabel>
+                    <FormControl>
+                      <div className="relative">
+                        <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input type="email" placeholder="e.g. john.doe@example.com" {...field} className="pl-10" />
+                      </div>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="phone"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Phone (Optional)</FormLabel>
+                    <FormControl>
+                      <div className="relative">
+                        <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input type="tel" placeholder="e.g. 555-123-4567" {...field} className="pl-10" />
+                      </div>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="status"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Status</FormLabel>
+                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select lead status" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="New">New</SelectItem>
+                        <SelectItem value="Contacted">Contacted</SelectItem>
+                        <SelectItem value="Qualified">Qualified</SelectItem>
+                        <SelectItem value="Lost">Lost</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="source"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Source</FormLabel>
+                    <FormControl>
+                      <div className="relative">
+                        <LeadSourceIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input placeholder="e.g. Website, Referral" {...field} className="pl-10" />
+                      </div>
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="notes"
+                render={({ field }) => (
+                    <FormItem>
+                        <FormLabel>Notes (Optional)</FormLabel>
+                        <FormControl>
+                            <Textarea placeholder="Any additional notes about this lead..." {...field} />
+                        </FormControl>
+                        <FormMessage />
+                    </FormItem>
+                )}
+               />
+              <DialogFooter className="pt-4">
+                <Button type="button" variant="outline" onClick={() => { setIsAddLeadDialogOpen(false); form.reset();}}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={form.formState.isSubmitting}>
+                  {form.formState.isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : "Save Lead"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Lead Dialog */}
+      <Dialog open={isEditLeadDialogOpen} onOpenChange={setIsEditLeadDialogOpen}>
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>Edit Lead: {selectedLead?.companyName}</DialogTitle>
+            <DialogDescription>
+              Update the details for this lead. Click save when you're done.
+            </DialogDescription>
+          </DialogHeader>
+          <Form {...editForm}>
+            <form onSubmit={editForm.handleSubmit(onEditLeadSubmit)} className="space-y-4 py-2 max-h-[70vh] overflow-y-auto pr-2">
+               <FormField control={editForm.control} name="companyName" render={({ field }) => ( <FormItem> <FormLabel>Company Name</FormLabel> <FormControl><div className="relative"><Building className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. Acme Corp" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
+               <FormField control={editForm.control} name="contactName" render={({ field }) => ( <FormItem> <FormLabel>Contact Name</FormLabel> <FormControl><div className="relative"><User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. John Doe" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
+               <FormField control={editForm.control} name="email" render={({ field }) => ( <FormItem> <FormLabel>Email</FormLabel> <FormControl><div className="relative"><Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input type="email" placeholder="e.g. john.doe@example.com" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
+               <FormField control={editForm.control} name="phone" render={({ field }) => ( <FormItem> <FormLabel>Phone (Optional)</FormLabel> <FormControl><div className="relative"><Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input type="tel" placeholder="e.g. 555-123-4567" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
+               <FormField control={editForm.control} name="status" render={({ field }) => ( <FormItem> <FormLabel>Status</FormLabel> <Select onValueChange={field.onChange} defaultValue={field.value}> <FormControl><SelectTrigger><SelectValue placeholder="Select lead status" /></SelectTrigger></FormControl> <SelectContent> <SelectItem value="New">New</SelectItem> <SelectItem value="Contacted">Contacted</SelectItem> <SelectItem value="Qualified">Qualified</SelectItem> <SelectItem value="Lost">Lost</SelectItem> </SelectContent> </Select> <FormMessage /> </FormItem> )} />
+               <FormField control={editForm.control} name="source" render={({ field }) => ( <FormItem> <FormLabel>Source</FormLabel> <FormControl><div className="relative"><LeadSourceIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. Website, Referral" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
+               <FormField control={editForm.control} name="notes" render={({ field }) => ( <FormItem> <FormLabel>Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Any additional notes about this lead..." {...field} /></FormControl> <FormMessage /> </FormItem> )} />
+              <DialogFooter className="pt-4">
+                <Button type="button" variant="outline" onClick={() => { setIsEditLeadDialogOpen(false); setSelectedLead(null); }}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={editForm.formState.isSubmitting}>
+                  {editForm.formState.isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving Changes...</> : "Save Changes"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Lead Dialog */}
+      <Dialog open={isViewLeadDialogOpen} onOpenChange={setIsViewLeadDialogOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center">
+              <Image 
+                src={selectedLead?.logoUrl || `https://placehold.co/40x40.png?text=${selectedLead?.companyName?.substring(0,2)?.toUpperCase() || 'L'}`} 
+                alt={selectedLead?.companyName || "Lead"} 
+                width={32} 
+                height={32} 
+                className="rounded-md mr-3 object-contain" 
+                data-ai-hint={selectedLead?.dataAiHint || "company logo"}
+              />
+              {selectedLead?.companyName}
+            </DialogTitle>
+            <DialogDescription>
+              Detailed information for this lead.
+            </DialogDescription>
+          </DialogHeader>
+          {selectedLead && (
+            <div className="space-y-4 py-2 max-h-[70vh] overflow-y-auto pr-2">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                <p><strong className="text-muted-foreground">Contact:</strong></p><p>{selectedLead.contactName}</p>
+                <p><strong className="text-muted-foreground">Email:</strong></p><p className="truncate">{selectedLead.email}</p>
+                <p><strong className="text-muted-foreground">Phone:</strong></p><p>{selectedLead.phone || "N/A"}</p>
+                <p><strong className="text-muted-foreground">Status:</strong></p><p><Badge variant={getStatusBadgeVariant(selectedLead.status)}>{selectedLead.status}</Badge></p>
+                <p><strong className="text-muted-foreground">Source:</strong></p><p>{selectedLead.source}</p>
+                <p><strong className="text-muted-foreground">Added:</strong></p><p>{selectedLead.dateAdded ? format(selectedLead.dateAdded.toDate(), "PPp") : 'N/A'}</p>
+                <p><strong className="text-muted-foreground">Last Updated:</strong></p><p>{selectedLead.lastUpdated ? format(selectedLead.lastUpdated.toDate(), "PPp") : 'N/A'}</p>
+              </div>
+              
+              {selectedLead.notes && (
+                <div>
+                  <h4 className="font-semibold text-muted-foreground mb-1">Notes:</h4>
+                  <p className="text-sm bg-muted/50 p-3 rounded-md whitespace-pre-wrap">{selectedLead.notes}</p>
+                </div>
+              )}
+
+              <Card className="mt-4 bg-card shadow-md">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-lg flex items-center">
+                    <BrainCircuit className="mr-2 h-5 w-5 text-primary" /> AI Lead Insights
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {selectedLead.leadScore !== undefined ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center">
+                        <Star className="h-5 w-5 text-yellow-500 mr-2" />
+                        <p className="text-xl font-bold text-primary">{selectedLead.leadScore} <span className="text-sm font-normal text-muted-foreground">/ 100</span></p>
+                      </div>
+                      <p><strong className="text-muted-foreground">Qualification:</strong> {selectedLead.isQualified ? <Badge variant="outline">Qualified</Badge> : <Badge variant="destructive">Not Qualified</Badge>}</p>
+                      <p><strong className="text-muted-foreground">Reason:</strong> {selectedLead.leadScoreReason}</p>
+                      <Button variant="outline" size="sm" onClick={handleScoreLead} disabled={isScoringLead} className="mt-2">
+                        {isScoringLead ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Re-scoring...</> : <><BrainCircuit className="mr-2 h-4 w-4" /> Re-Score Lead</>}
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="text-center">
+                      <p className="text-muted-foreground mb-3">No AI score available for this lead yet.</p>
+                      <Button onClick={handleScoreLead} disabled={isScoringLead}>
+                        {isScoringLead ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Scoring...</> : <><BrainCircuit className="mr-2 h-4 w-4" /> Score Lead with AI</>}
+                      </Button>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          )}
+          <DialogFooter className="pt-4">
+            <Button variant="outline" onClick={() => setIsViewLeadDialogOpen(false)}>Close</Button>
+             <Button onClick={() => { setIsViewLeadDialogOpen(false); handleEditLead(selectedLead!); }}>
+                <Edit className="mr-2 h-4 w-4" /> Edit Lead
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Lead Management</h1>
@@ -181,136 +539,7 @@ export default function AdminLeadsPage() {
             Oversee and manage all potential client leads for LuxeFlow.
           </p>
         </div>
-        <Dialog open={isAddLeadDialogOpen} onOpenChange={setIsAddLeadDialogOpen}>
-          <DialogTrigger asChild>
-            <Button onClick={() => setIsAddLeadDialogOpen(true)}>
-              <PlusCircle className="mr-2 h-4 w-4" /> Add New Lead
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="sm:max-w-[480px]">
-            <DialogHeader>
-              <DialogTitle>Add New Lead</DialogTitle>
-              <DialogDescription>
-                Enter the details for the new lead below. Click save when you're done.
-              </DialogDescription>
-            </DialogHeader>
-            <Form {...form}>
-              <form onSubmit={form.handleSubmit(onAddLeadSubmit)} className="space-y-4 py-2">
-                <FormField
-                  control={form.control}
-                  name="companyName"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Company Name</FormLabel>
-                      <FormControl>
-                        <div className="relative">
-                          <Building className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                          <Input placeholder="e.g. Acme Corp" {...field} className="pl-10" />
-                        </div>
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="contactName"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Contact Name</FormLabel>
-                      <FormControl>
-                         <div className="relative">
-                          <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                          <Input placeholder="e.g. John Doe" {...field} className="pl-10" />
-                        </div>
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="email"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Email</FormLabel>
-                      <FormControl>
-                        <div className="relative">
-                          <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                          <Input type="email" placeholder="e.g. john.doe@example.com" {...field} className="pl-10" />
-                        </div>
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="phone"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Phone (Optional)</FormLabel>
-                      <FormControl>
-                        <div className="relative">
-                          <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                          <Input type="tel" placeholder="e.g. 555-123-4567" {...field} className="pl-10" />
-                        </div>
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="status"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Status</FormLabel>
-                      <Select onValueChange={field.onChange} defaultValue={field.value}>
-                        <FormControl>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select lead status" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          <SelectItem value="New">New</SelectItem>
-                          <SelectItem value="Contacted">Contacted</SelectItem>
-                          <SelectItem value="Qualified">Qualified</SelectItem>
-                          <SelectItem value="Lost">Lost</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={form.control}
-                  name="source"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Source</FormLabel>
-                      <FormControl>
-                        <div className="relative">
-                          <LeadSourceIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                          <Input placeholder="e.g. Website, Referral" {...field} className="pl-10" />
-                        </div>
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => { setIsAddLeadDialogOpen(false); form.reset();}}>
-                    Cancel
-                  </Button>
-                  <Button type="submit" disabled={form.formState.isSubmitting}>
-                    {form.formState.isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : "Save Lead"}
-                  </Button>
-                </DialogFooter>
-              </form>
-            </Form>
-          </DialogContent>
-        </Dialog>
+        {/* Trigger moved to top of file */}
       </div>
       
       <Card className="shadow-lg">
@@ -353,11 +582,10 @@ export default function AdminLeadsPage() {
                      <p className="text-xs text-muted-foreground">Source: {lead.source}</p>
                      <p className="text-xs text-muted-foreground">Added: {lead.dateAdded ? format(lead.dateAdded.toDate(), "PP") : 'N/A'}</p>
                      <div className="flex space-x-2 mt-2 sm:mt-1 self-start sm:self-auto">
-                        {/* TODO: Implement View/Edit functionality */}
-                        <Button variant="outline" size="sm" disabled> 
+                        <Button variant="outline" size="sm" onClick={() => handleViewLead(lead)}> 
                             <Eye className="mr-1 h-3 w-3" /> View
                         </Button>
-                        <Button variant="outline" size="sm" disabled>
+                        <Button variant="outline" size="sm" onClick={() => handleEditLead(lead)}>
                             <Edit className="mr-1 h-3 w-3" /> Edit
                         </Button>
                      </div>
@@ -378,3 +606,4 @@ export default function AdminLeadsPage() {
   );
 }
 
+    
