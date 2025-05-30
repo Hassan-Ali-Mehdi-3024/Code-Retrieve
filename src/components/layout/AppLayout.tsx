@@ -59,7 +59,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         collapsible="icon" 
         className="border-r bg-sidebar text-sidebar-foreground"
       >
-        <SidebarHeader className="border-b border-sidebar-border p-4">
+        <SidebarHeader className="border-b border-sidebar-border p-4 group-data-[collapsible=icon]:p-2">
           <Link href="/dashboard" className="flex items-center gap-2 font-semibold text-sidebar-foreground group-data-[collapsible=icon]:justify-center">
             <Briefcase className="h-7 w-7 text-sidebar-primary shrink-0" />
             <span className="text-xl group-data-[collapsible=icon]:hidden whitespace-nowrap">{siteConfig.name}</span>
