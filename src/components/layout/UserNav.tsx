@@ -11,21 +11,17 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  DropdownMenuSub,
-  DropdownMenuSubTrigger,
-  DropdownMenuSubContent,
-  DropdownMenuPortal
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/context/AuthContext";
 import { siteConfig } from "@/config/site";
 import Link from "next/link";
-import { LogOut, UserCircle, Sun, Moon, Laptop } from "lucide-react";
-import { useTheme } from "next-themes";
+import { LogOut } from "lucide-react"; // Removed Sun, Moon, Laptop
+// import { useTheme } from "next-themes"; // Removed useTheme
 import { useEffect, useState } from "react";
 
 export function UserNav() {
   const { userProfile, signOut } = useAuth();
-  const { theme, setTheme, resolvedTheme } = useTheme(); // Added resolvedTheme
+  // const { theme, setTheme, resolvedTheme } = useTheme(); // Removed theme state
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -77,33 +73,7 @@ export function UserNav() {
           ))}
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
-         {mounted && (
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger>
-              {resolvedTheme === 'light' && <Sun className="mr-2 h-4 w-4" />}
-              {resolvedTheme === 'dark' && <Moon className="mr-2 h-4 w-4" />}
-              {theme === 'system' && resolvedTheme !== 'light' && resolvedTheme !== 'dark' && <Laptop className="mr-2 h-4 w-4" />}
-              <span>Theme</span>
-            </DropdownMenuSubTrigger>
-            <DropdownMenuPortal>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onClick={() => setTheme("light")}>
-                  <Sun className="mr-2 h-4 w-4" />
-                  Light
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setTheme("dark")}>
-                  <Moon className="mr-2 h-4 w-4" />
-                  Dark
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setTheme("system")}>
-                  <Laptop className="mr-2 h-4 w-4" />
-                  System
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuPortal>
-          </DropdownMenuSub>
-        )}
-        <DropdownMenuSeparator />
+        {/* Removed Theme DropdownMenuSub */}
         <DropdownMenuItem onClick={signOut} className="cursor-pointer text-red-600 focus:text-red-600 focus:bg-red-50 dark:text-red-400 dark:focus:text-red-400 dark:focus:bg-red-900/50">
           <LogOut className="mr-2 h-4 w-4" />
           <span>Log out</span>

@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { User, Shield, Edit3, KeyRound, Loader2, Settings as SettingsIcon, Palette, Sun, Moon, Laptop } from "lucide-react";
+import { User, Shield, Edit3, KeyRound, Loader2, Settings as SettingsIcon } from "lucide-react";
 import { useForm } from "react-hook-form";
 import * as z from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -17,8 +17,6 @@ import { useState, useEffect } from "react";
 import { updateProfile, EmailAuthProvider, reauthenticateWithCredential, updatePassword } from "firebase/auth";
 import { doc, updateDoc } from "firebase/firestore";
 import { db, auth } from "@/lib/firebase/config";
-import { useTheme } from "next-themes";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 const profileSchema = z.object({
   displayName: z.string().min(2, "Display name must be at least 2 characters."),
@@ -40,7 +38,6 @@ export default function SettingsPage() {
   const { toast } = useToast();
   const [isProfileSubmitting, setIsProfileSubmitting] = useState(false);
   const [isPasswordSubmitting, setIsPasswordSubmitting] = useState(false);
-  const { theme, setTheme, resolvedTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -89,10 +86,6 @@ export default function SettingsPage() {
 
       const userDocRef = doc(db, "users", user.uid);
       await updateDoc(userDocRef, { displayName: values.displayName });
-      
-      // To trigger a re-fetch/update in AuthContext, ideally context would expose a setter
-      // For now, we rely on re-render or user re-navigating to see changes in header etc.
-      // The profile page itself will reflect change on form reset or re-fetch
       
       toast({
         title: "Profile Updated",
@@ -293,56 +286,6 @@ export default function SettingsPage() {
                 Change Password
             </Button>
           </form>
-        </CardContent>
-      </Card>
-
-      <Card className="shadow-md">
-        <CardHeader>
-          <CardTitle className="flex items-center text-xl">
-            <Palette className="mr-3 h-6 w-6 text-primary" />
-            Appearance
-          </CardTitle>
-          <CardDescription>
-            Choose how LuxeFlow looks to you. Select a theme preference.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <RadioGroup
-            value={theme}
-            onValueChange={setTheme}
-            className="grid grid-cols-1 sm:grid-cols-3 gap-4"
-          >
-            <Label
-              htmlFor="light-theme"
-              className={`flex flex-col items-center justify-center rounded-md border-2 p-4 hover:bg-accent hover:text-accent-foreground cursor-pointer ${
-                theme === "light" ? "border-primary ring-2 ring-primary" : "border-muted"
-              }`}
-            >
-              <RadioGroupItem value="light" id="light-theme" className="sr-only" />
-              <Sun className="h-6 w-6 mb-2" />
-              Light
-            </Label>
-            <Label
-              htmlFor="dark-theme"
-              className={`flex flex-col items-center justify-center rounded-md border-2 p-4 hover:bg-accent hover:text-accent-foreground cursor-pointer ${
-                theme === "dark" ? "border-primary ring-2 ring-primary" : "border-muted"
-              }`}
-            >
-              <RadioGroupItem value="dark" id="dark-theme" className="sr-only" />
-              <Moon className="h-6 w-6 mb-2" />
-              Dark
-            </Label>
-            <Label
-              htmlFor="system-theme"
-              className={`flex flex-col items-center justify-center rounded-md border-2 p-4 hover:bg-accent hover:text-accent-foreground cursor-pointer ${
-                theme === "system" ? "border-primary ring-2 ring-primary" : "border-muted"
-              }`}
-            >
-              <RadioGroupItem value="system" id="system-theme" className="sr-only" />
-              <Laptop className="h-6 w-6 mb-2" />
-              System
-            </Label>
-          </RadioGroup>
         </CardContent>
       </Card>
 
