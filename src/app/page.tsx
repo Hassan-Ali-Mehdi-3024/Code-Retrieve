@@ -1,6 +1,7 @@
+
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Briefcase, Zap, Users, Send, BarChart3, LogIn } from "lucide-react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"; // Ensure CardFooter is imported
+import { Briefcase, Zap, Users, Send, BarChart3, LogIn, Search, DollarSign, WrenchIcon, ArrowRight } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 
@@ -32,17 +33,44 @@ export default function HomePage() {
     },
   ];
 
+  const clientTools = [
+    {
+      icon: <Search className="h-10 w-10 text-primary" />,
+      title: "Check Your Estimate",
+      description: "View the details and status of your service estimate.",
+      href: "/client/find-estimate",
+      cta: "Find Estimate",
+      dataAiHint: "document search"
+    },
+    {
+      icon: <DollarSign className="h-10 w-10 text-primary" />,
+      title: "Pay Your Invoice",
+      description: "Securely access and pay your outstanding invoices online.",
+      href: "/client/find-invoice",
+      cta: "Find Invoice",
+      dataAiHint: "payment money"
+    },
+    {
+      icon: <WrenchIcon className="h-10 w-10 text-primary" />,
+      title: "Track Your Job Status",
+      description: "Get real-time updates on the progress of your scheduled service.",
+      href: "/client/track-job",
+      cta: "Track Job",
+      dataAiHint: "tools construction"
+    },
+  ];
+
   return (
     <div className="flex flex-col min-h-screen bg-gradient-to-br from-background to-secondary/30">
       {/* Header */}
-      <header className="container mx-auto py-6 px-4 md:px-6 flex justify-between items-center">
+      <header className="container mx-auto py-6 px-4 md:px-6 flex justify-between items-center sticky top-0 z-50 bg-background/80 backdrop-blur-md">
         <Link href="/" className="flex items-center gap-2">
           <Briefcase className="h-8 w-8 text-primary" />
           <span className="text-2xl font-bold text-primary">Luxe Maintainance CRM</span>
         </Link>
         <nav className="space-x-2 sm:space-x-4">
           <Button variant="ghost" asChild>
-            <Link href="/client/payment/demo">Client Portal</Link>
+            <Link href="#client-tools">Client Portal</Link>
           </Button>
           <Button asChild>
             <Link href="/login">
@@ -82,6 +110,40 @@ export default function HomePage() {
               priority
             />
             <div className="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent rounded-xl"></div>
+          </div>
+        </section>
+        
+        {/* Client Tools Section */}
+        <section id="client-tools" className="py-20 bg-muted/30">
+          <div className="container mx-auto px-4 md:px-6">
+            <div className="text-center mb-16">
+              <h2 className="text-3xl md:text-4xl font-bold text-foreground">Client Self-Service</h2>
+              <p className="text-lg text-muted-foreground mt-2 max-w-2xl mx-auto">
+                Quickly access your service information using your reference number.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+              {clientTools.map((tool) => (
+                <Card key={tool.title} className="shadow-lg hover:shadow-xl transition-shadow duration-300 flex flex-col">
+                  <CardHeader className="items-center text-center">
+                    <div className="p-4 bg-primary/10 rounded-full mb-4 inline-block">
+                      {tool.icon}
+                    </div>
+                    <CardTitle className="text-xl">{tool.title}</CardTitle>
+                  </CardHeader>
+                  <CardContent className="flex-grow">
+                    <CardDescription className="text-center min-h-[40px]">{tool.description}</CardDescription>
+                  </CardContent>
+                  <CardFooter>
+                    <Button asChild className="w-full bg-primary hover:bg-primary/80 text-primary-foreground">
+                      <Link href={tool.href}>
+                        {tool.cta} <ArrowRight className="ml-2 h-4 w-4" />
+                      </Link>
+                    </Button>
+                  </CardFooter>
+                </Card>
+              ))}
+            </div>
           </div>
         </section>
 
@@ -137,3 +199,5 @@ export default function HomePage() {
     </div>
   );
 }
+
+    
