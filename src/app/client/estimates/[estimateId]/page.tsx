@@ -44,10 +44,10 @@ interface Estimate {
 
 // Static company details for display on the estimate
 const companyDetails = {
-  name: "LuxeFlow by LUXE Maintenance Corporation",
+  name: "Luxe Maintainance CRM by LUXE Maintenance Corporation",
   address: "123 Luxe Lane, Prestige City, ST 12345",
   phone: "(555) 123-4567",
-  email: "quotes@luxeflow.com",
+  email: "quotes@luxemaintenancecorp.com", // Changed to a more specific company email
 };
 
 export default function ClientEstimatePage({ params }: ClientEstimatePageProps) {

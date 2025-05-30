@@ -37,6 +37,7 @@ import { db } from "@/lib/firebase/config";
 import { collection, addDoc, getDocs, Timestamp, query, orderBy, doc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { format } from "date-fns";
 import { scoreLead, type ScoreLeadInput, type ScoreLeadOutput } from "@/ai/flows/lead-scoring";
+import type { Customer } from "../customers/page"; // Assuming Customer type might be useful
 
 // Define Lead Status type
 type LeadStatus = "New" | "Contacted" | "Qualified" | "Lost" | "Converted";
@@ -46,14 +47,14 @@ interface Lead {
   companyName: string;
   contactName: string;
   email: string;
-  phone?: string | null; // Changed from string to string | null
+  phone?: string | null;
   status: LeadStatus;
   source: string;
   dateAdded: Timestamp;
   lastUpdated?: Timestamp;
   logoUrl?: string; 
   dataAiHint?: string;
-  notes?: string | null; // Changed from string to string | null
+  notes?: string | null;
   // AI Scoring fields
   leadScore?: number;
   leadScoreReason?: string;
@@ -64,10 +65,10 @@ const leadSchema = z.object({
   companyName: z.string().min(2, "Company name must be at least 2 characters."),
   contactName: z.string().min(2, "Contact name must be at least 2 characters."),
   email: z.string().email("Invalid email address."),
-  phone: z.string().min(10, "Phone number seems too short.").optional().or(z.literal("")).nullable(), // Allow null
+  phone: z.string().min(10, "Phone number seems too short.").optional().or(z.literal("")).nullable(),
   status: z.enum(["New", "Contacted", "Qualified", "Lost", "Converted"]),
   source: z.string().min(2, "Source must be at least 2 characters."),
-  notes: z.string().optional().nullable(), // Allow null
+  notes: z.string().optional().nullable(), 
 });
 
 const getStatusBadgeVariant = (status: LeadStatus) => {
@@ -79,7 +80,7 @@ const getStatusBadgeVariant = (status: LeadStatus) => {
     case "Qualified":
       return "outline"; 
     case "Converted":
-      return "default"; // Consider a distinct color like success (green) if theme supports
+      return "default"; 
     case "Lost":
       return "destructive";
     default:
@@ -265,7 +266,7 @@ export default function AdminLeadsPage() {
         isQualified: scoreOutput.isQualified,
         lastUpdated: Timestamp.now() 
       };
-      setSelectedLead(updatedLeadWithScore); // Update selected lead if viewed
+      setSelectedLead(updatedLeadWithScore); 
       setLeads(prevLeads => prevLeads.map(l => l.id === currentLead.id ? updatedLeadWithScore : l));
       
       toast({
@@ -288,25 +289,23 @@ export default function AdminLeadsPage() {
     if (!selectedLead) return;
     setIsConvertingToCustomer(true);
     try {
-      const newCustomerData = {
+      const newCustomerData: Omit<Customer, 'id' | 'customerSince' | 'lastUpdated'> & { customerSince?: any, lastUpdated?: any, originalLeadId?: string } = {
         companyName: selectedLead.companyName,
         contactName: selectedLead.contactName,
         email: selectedLead.email,
         phone: selectedLead.phone || null,
-        address: null, // Lead object doesn't have address, can be added later
+        address: null, 
         notes: selectedLead.notes || null,
         customerSince: serverTimestamp(),
         lastUpdated: serverTimestamp(),
         logoUrl: `https://placehold.co/40x40.png?text=${selectedLead.companyName.substring(0,2).toUpperCase()}`,
         dataAiHint: "company logo",
-        // You might want to link back to the original lead ID
         originalLeadId: selectedLead.id, 
       };
 
       const customersCollectionRef = collection(db, "customers");
       await addDoc(customersCollectionRef, newCustomerData);
 
-      // Update lead status to "Converted"
       const leadDocRef = doc(db, "leads", selectedLead.id);
       await updateDoc(leadDocRef, {
         status: "Converted" as LeadStatus,
@@ -318,8 +317,8 @@ export default function AdminLeadsPage() {
         description: `${selectedLead.companyName} has been successfully converted to a customer.`,
       });
 
-      setIsViewLeadDialogOpen(false); // Close view dialog
-      fetchLeads(); // Refresh leads list
+      setIsViewLeadDialogOpen(false); 
+      fetchLeads(); 
 
     } catch (error) {
       console.error("Error converting lead to customer: ", error);
@@ -501,7 +500,7 @@ export default function AdminLeadsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Lead Management</h1>
-          <p className="text-muted-foreground">Oversee and manage all potential client leads for LuxeFlow.</p>
+          <p className="text-muted-foreground">Oversee and manage all potential client leads for Luxe Maintainance CRM.</p>
         </div>
       </div>
       
@@ -563,6 +562,3 @@ export default function AdminLeadsPage() {
     </div>
   );
 }
-
-
-    

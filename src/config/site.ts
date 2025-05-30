@@ -3,7 +3,7 @@ import type { NavItem, UserRole } from "@/types";
 import { LayoutDashboard, Users, Briefcase, FileText, Wrench, DollarSign, Settings, LogOut, UserCircle, Building, Receipt } from "lucide-react"; // Added Receipt
 
 export const siteConfig = {
-  name: "LuxeFlow",
+  name: "Luxe Maintainance CRM",
   description: "CRM for LUXE Maintenance Corporation to automate lead management, job dispatch, and invoicing.",
   url: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000", 
   ogImage: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/og.jpg`,
@@ -54,5 +54,3 @@ export function getSidebarNavItems(role: UserRole): NavItem[] {
       return [];
   }
 }
-
-    

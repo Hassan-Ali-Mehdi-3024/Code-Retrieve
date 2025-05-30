@@ -1,4 +1,4 @@
-# Firebase Studio
+# Luxe Maintainance CRM
 
 This is a NextJS starter in Firebase Studio.
 

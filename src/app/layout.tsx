@@ -14,9 +14,9 @@ export const metadata: Metadata = {
     template: `%s | ${siteConfig.name}`,
   },
   description: siteConfig.description,
-  keywords: ["CRM", "Maintenance", "LuxeFlow", "Automation"],
-  authors: [{ name: "LuxeFlow Team" }],
-  creator: "LuxeFlow Team",
+  keywords: ["CRM", "Maintenance", "Luxe Maintainance CRM", "Automation"],
+  authors: [{ name: "Luxe Maintainance CRM Team" }],
+  creator: "Luxe Maintainance CRM Team",
   metadataBase: new URL(siteConfig.url),
   openGraph: {
     type: "website",

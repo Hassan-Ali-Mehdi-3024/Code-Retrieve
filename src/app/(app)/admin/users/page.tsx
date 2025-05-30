@@ -28,7 +28,6 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import {
   Form,
@@ -129,8 +128,6 @@ export default function AdminUsersPage() {
       const newAuthUser = userCredential.user;
       await addAppUser(newAuthUser.uid, values.email, values.displayName, values.role as UserRole);
       
-      // Instead of manually constructing, refetch or add to state ensuring sort order
-      // For simplicity, we'll prepend and re-sort locally, but refetch is more robust for real apps
       const newUserProfile: UserProfile = {
         uid: newAuthUser.uid,
         email: values.email,
@@ -268,7 +265,7 @@ export default function AdminUsersPage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">User Management</h1>
           <p className="text-muted-foreground">
-            Manage all users and their roles within LuxeFlow.
+            Manage all users and their roles within Luxe Maintainance CRM.
           </p>
         </div>
         <Dialog open={isAddUserDialogOpen} onOpenChange={setIsAddUserDialogOpen}>
@@ -489,7 +486,7 @@ export default function AdminUsersPage() {
                 <li key={user.uid} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 border rounded-lg hover:bg-muted/50 transition-colors gap-4 sm:gap-0">
                   <div className="flex items-center space-x-3">
                     <Avatar className="h-10 w-10">
-                      <AvatarImage src={user.photoURL || undefined} alt={user.displayName || "User"} data-ai-hint="user avatar" />
+                      <AvatarImage src={user.photoURL || undefined} alt={user.displayName || "User"} data-ai-hint="user avatar"/>
                       <AvatarFallback>{getInitials(user.displayName)}</AvatarFallback>
                     </Avatar>
                     <div>
@@ -528,6 +525,3 @@ export default function AdminUsersPage() {
     </div>
   );
 }
-
-
-    

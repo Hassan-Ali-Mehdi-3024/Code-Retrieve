@@ -58,7 +58,7 @@ export default function DashboardPage() {
         <LayoutDashboard className="h-5 w-5 text-primary" />
         <AlertTitle className="font-semibold text-primary">Your Dashboard Overview</AlertTitle>
         <AlertDescription>
-          This is your central hub for all activities within LuxeFlow. Use the sidebar to navigate to different sections.
+          This is your central hub for all activities within Luxe Maintainance CRM. Use the sidebar to navigate to different sections.
         </AlertDescription>
       </Alert>
 

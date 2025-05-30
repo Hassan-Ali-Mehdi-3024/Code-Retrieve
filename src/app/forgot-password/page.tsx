@@ -10,9 +10,9 @@ export default function ForgotPasswordPage() {
       <div className="mb-8 flex flex-col items-center">
          <Link href="/" className="flex items-center gap-2 mb-2">
           <Briefcase className="h-10 w-10 text-primary" />
-          <h1 className="text-3xl font-bold text-primary">LuxeFlow</h1>
+          <h1 className="text-3xl font-bold text-primary">Luxe Maintainance CRM</h1>
         </Link>
-        <p className="text-muted-foreground">Recover your LuxeFlow account</p>
+        <p className="text-muted-foreground">Recover your Luxe Maintainance CRM account</p>
       </div>
       <Card className="w-full max-w-md shadow-xl">
         <CardHeader className="text-center">
