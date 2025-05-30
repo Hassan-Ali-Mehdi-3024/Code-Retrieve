@@ -3,14 +3,14 @@
 
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useMemo } from "react"; // Added useMemo
+import { useEffect, useState, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Building, PlusCircle, Edit, Eye, Mail, Phone, User, Briefcase as LeadSourceIcon, Loader2, BrainCircuit, Star, UserCheck, RefreshCw, Search as SearchIcon } from "lucide-react"; // Added SearchIcon
+import { Building, PlusCircle, Edit, Eye, Mail, Phone, User, Briefcase as LeadSourceIcon, Loader2, BrainCircuit, Star, UserCheck, RefreshCw, Search as SearchIcon } from "lucide-react";
 import Image from "next/image";
 import {
   Dialog,
@@ -19,7 +19,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   Form,
@@ -166,7 +165,7 @@ export default function AdminLeadsPage() {
       };
       
       const leadsCollectionRef = collection(db, "leads");
-      const docRef = await addDoc(leadsCollectionRef, newLeadData);
+      await addDoc(leadsCollectionRef, newLeadData);
       
       toast({
         title: "Lead Added",
@@ -174,9 +173,7 @@ export default function AdminLeadsPage() {
       });
       form.reset();
       setIsAddLeadDialogOpen(false);
-      // Optimistically add to local state or refetch
-       setLeads(prev => [{...newLeadData, id: docRef.id, dateAdded: Timestamp.now(), lastUpdated: Timestamp.now()} as Lead, ...prev]);
-      // fetchLeads(); // Or refetch for full consistency
+      fetchLeads(); 
     } catch (error) {
       console.error("Error adding lead: ", error);
       toast({
@@ -219,9 +216,7 @@ export default function AdminLeadsPage() {
       });
       setIsEditLeadDialogOpen(false);
       setSelectedLead(null);
-      // Optimistically update local state or refetch
-      setLeads(prev => prev.map(l => l.id === selectedLead.id ? {...l, ...updatedData, lastUpdated: Timestamp.now()} as Lead : l));
-      // fetchLeads();
+      fetchLeads();
     } catch (error) {
       console.error("Error updating lead: ", error);
       toast({
@@ -263,6 +258,7 @@ export default function AdminLeadsPage() {
         ...aiUpdate,
         lastUpdated: Timestamp.now() 
       } as Lead;
+      
       setSelectedLead(updatedLeadWithScore); 
       setLeads(prevLeads => prevLeads.map(l => l.id === currentLead.id ? updatedLeadWithScore : l));
       
@@ -315,8 +311,7 @@ export default function AdminLeadsPage() {
       });
 
       setIsViewLeadDialogOpen(false); 
-      setLeads(prev => prev.map(l => l.id === selectedLead.id ? {...l, status: "Converted", lastUpdated: Timestamp.now()} as Lead : l));
-      // fetchLeads(); 
+      fetchLeads(); 
 
     } catch (error) {
       console.error("Error converting lead to customer: ", error);
@@ -364,7 +359,6 @@ export default function AdminLeadsPage() {
     <div className="space-y-6">
       {/* Add Lead Dialog */}
       <Dialog open={isAddLeadDialogOpen} onOpenChange={setIsAddLeadDialogOpen}>
-        {/* DialogTrigger is part of the header now */}
         <DialogContent className="sm:max-w-lg rounded-lg">
           <DialogHeader>
             <DialogTitle className="text-xl">Add New Lead</DialogTitle>
@@ -518,11 +512,9 @@ export default function AdminLeadsPage() {
                     className="pl-10 rounded-md bg-card" 
                 />
             </div>
-            <DialogTrigger asChild>
-                <Button onClick={() => { form.reset({ companyName: "", contactName: "", email: "", phone: "", status: "New", source: "", notes: "" }); setIsAddLeadDialogOpen(true);}} className="rounded-md">
-                    <PlusCircle className="mr-2 h-4 w-4" /> Add New Lead
-                </Button>
-            </DialogTrigger>
+            <Button onClick={() => { form.reset({ companyName: "", contactName: "", email: "", phone: "", status: "New", source: "", notes: "" }); setIsAddLeadDialogOpen(true);}} className="rounded-md">
+                <PlusCircle className="mr-2 h-4 w-4" /> Add New Lead
+            </Button>
         </div>
       </div>
       
@@ -584,3 +576,4 @@ export default function AdminLeadsPage() {
     </div>
   );
 }
+
