@@ -8,15 +8,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { User, Shield, Edit3, KeyRound, Loader2, Settings as SettingsIcon } from "lucide-react";
+import { User, Shield, Edit3, KeyRound, Loader2, Settings as SettingsIcon, Palette, Sun, Moon, Laptop } from "lucide-react";
 import { useForm } from "react-hook-form";
 import * as z from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useToast } from "@/hooks/use-toast";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { updateProfile, EmailAuthProvider, reauthenticateWithCredential, updatePassword } from "firebase/auth";
 import { doc, updateDoc } from "firebase/firestore";
 import { db, auth } from "@/lib/firebase/config";
+import { useTheme } from "next-themes";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 
 const profileSchema = z.object({
   displayName: z.string().min(2, "Display name must be at least 2 characters."),
@@ -24,7 +26,7 @@ const profileSchema = z.object({
 });
 
 const passwordSchema = z.object({
-  currentPassword: z.string().min(1, "Current password is required."), // Changed min to 1 as Firebase handles length
+  currentPassword: z.string().min(1, "Current password is required."),
   newPassword: z.string().min(6, "New password must be at least 6 characters."),
   confirmPassword: z.string().min(6, "Confirm password is required."),
 }).refine(data => data.newPassword === data.confirmPassword, {
@@ -34,10 +36,16 @@ const passwordSchema = z.object({
 
 
 export default function SettingsPage() {
-  const { userProfile, user, loading: authLoading, setUserProfile: setAuthContextProfile } = useAuth(); // Assuming setUserProfile is added to context
+  const { userProfile, user, loading: authLoading } = useAuth();
   const { toast } = useToast();
   const [isProfileSubmitting, setIsProfileSubmitting] = useState(false);
   const [isPasswordSubmitting, setIsPasswordSubmitting] = useState(false);
+  const { theme, setTheme, resolvedTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const profileForm = useForm<z.infer<typeof profileSchema>>({
     resolver: zodResolver(profileSchema),
@@ -47,8 +55,7 @@ export default function SettingsPage() {
     },
   });
 
-  // Update form default values if userProfile changes after initial load
-  useState(() => {
+  useEffect(() => {
     if (userProfile) {
         profileForm.reset({
             displayName: userProfile.displayName || "",
@@ -74,21 +81,19 @@ export default function SettingsPage() {
     }
     setIsProfileSubmitting(true);
     try {
-      // Update Firebase Auth display name
-      if (auth.currentUser) { // Ensure currentUser is not null
+      if (auth.currentUser) {
         await updateProfile(auth.currentUser, { displayName: values.displayName });
       } else {
         throw new Error("Firebase Auth current user not available.");
       }
 
-      // Update Firestore user document
       const userDocRef = doc(db, "users", user.uid);
       await updateDoc(userDocRef, { displayName: values.displayName });
       
-      // Optionally, update context state if your context provides a setter
-      // For example: setAuthContextProfile({ ...userProfile, displayName: values.displayName });
-      // This depends on AuthContext implementation. For now, a page refresh would show changes.
-
+      // To trigger a re-fetch/update in AuthContext, ideally context would expose a setter
+      // For now, we rely on re-render or user re-navigating to see changes in header etc.
+      // The profile page itself will reflect change on form reset or re-fetch
+      
       toast({
         title: "Profile Updated",
         description: "Your display name has been successfully updated.",
@@ -106,17 +111,14 @@ export default function SettingsPage() {
   }
 
   async function onPasswordSubmit(values: z.infer<typeof passwordSchema>) {
-    if (!user || !user.email) { // Check for user.email as it's needed for credential
+    if (!user || !user.email) {
         toast({ title: "Error", description: "User or user email not found. Please re-login.", variant: "destructive"});
         return;
     }
     setIsPasswordSubmitting(true);
     try {
-      // Re-authenticate user
       const credential = EmailAuthProvider.credential(user.email, values.currentPassword);
       await reauthenticateWithCredential(user, credential);
-
-      // Update password
       await updatePassword(user, values.newPassword);
 
       toast({
@@ -149,7 +151,7 @@ export default function SettingsPage() {
     return (names[0][0]?.toUpperCase() || "") + (names[names.length - 1][0]?.toUpperCase() || "");
   };
 
-  if (authLoading || !userProfile || !user) {
+  if (authLoading || !userProfile || !user || !mounted) {
     return (
         <div className="flex h-screen items-center justify-center">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -168,7 +170,6 @@ export default function SettingsPage() {
       </div>
       <Separator />
 
-      {/* Profile Settings */}
       <Card className="shadow-md">
         <CardHeader>
           <CardTitle className="flex items-center text-xl">
@@ -186,7 +187,7 @@ export default function SettingsPage() {
               <AvatarFallback className="text-2xl">{getInitials(userProfile.displayName)}</AvatarFallback>
             </Avatar>
             <div>
-              <Button variant="outline" size="sm" disabled> {/* onClick={() => toast({description: "Avatar upload TBD."})} */}
+              <Button variant="outline" size="sm" disabled>
                 <Edit3 className="mr-2 h-4 w-4" /> Change Avatar (TBD)
               </Button>
               <p className="text-xs text-muted-foreground mt-1">JPG, GIF or PNG. 1MB max.</p>
@@ -233,7 +234,6 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
-      {/* Security Settings */}
       <Card className="shadow-md">
         <CardHeader>
           <CardTitle className="flex items-center text-xl">
@@ -296,6 +296,56 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
 
+      <Card className="shadow-md">
+        <CardHeader>
+          <CardTitle className="flex items-center text-xl">
+            <Palette className="mr-3 h-6 w-6 text-primary" />
+            Appearance
+          </CardTitle>
+          <CardDescription>
+            Choose how LuxeFlow looks to you. Select a theme preference.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <RadioGroup
+            value={theme}
+            onValueChange={setTheme}
+            className="grid grid-cols-1 sm:grid-cols-3 gap-4"
+          >
+            <Label
+              htmlFor="light-theme"
+              className={`flex flex-col items-center justify-center rounded-md border-2 p-4 hover:bg-accent hover:text-accent-foreground cursor-pointer ${
+                theme === "light" ? "border-primary ring-2 ring-primary" : "border-muted"
+              }`}
+            >
+              <RadioGroupItem value="light" id="light-theme" className="sr-only" />
+              <Sun className="h-6 w-6 mb-2" />
+              Light
+            </Label>
+            <Label
+              htmlFor="dark-theme"
+              className={`flex flex-col items-center justify-center rounded-md border-2 p-4 hover:bg-accent hover:text-accent-foreground cursor-pointer ${
+                theme === "dark" ? "border-primary ring-2 ring-primary" : "border-muted"
+              }`}
+            >
+              <RadioGroupItem value="dark" id="dark-theme" className="sr-only" />
+              <Moon className="h-6 w-6 mb-2" />
+              Dark
+            </Label>
+            <Label
+              htmlFor="system-theme"
+              className={`flex flex-col items-center justify-center rounded-md border-2 p-4 hover:bg-accent hover:text-accent-foreground cursor-pointer ${
+                theme === "system" ? "border-primary ring-2 ring-primary" : "border-muted"
+              }`}
+            >
+              <RadioGroupItem value="system" id="system-theme" className="sr-only" />
+              <Laptop className="h-6 w-6 mb-2" />
+              System
+            </Label>
+          </RadioGroup>
+        </CardContent>
+      </Card>
+
       {userProfile.role === 'admin' && (
         <Card className="shadow-md">
             <CardHeader>
@@ -317,4 +367,3 @@ export default function SettingsPage() {
     </div>
   );
 }
-

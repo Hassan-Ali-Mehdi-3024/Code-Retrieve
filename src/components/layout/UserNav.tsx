@@ -11,17 +11,29 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
+  DropdownMenuPortal
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/context/AuthContext";
 import { siteConfig } from "@/config/site";
 import Link from "next/link";
-import { LogOut, UserCircle } from "lucide-react"; // Added UserCircle
+import { LogOut, UserCircle, Sun, Moon, Laptop } from "lucide-react";
+import { useTheme } from "next-themes";
+import { useEffect, useState } from "react";
 
 export function UserNav() {
   const { userProfile, signOut } = useAuth();
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   if (!userProfile) {
-    return null; // Or a login button if appropriate for context
+    return null;
   }
 
   const getInitials = (name: string | null | undefined) => {
@@ -64,6 +76,33 @@ export function UserNav() {
             </DropdownMenuItem>
           ))}
         </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+         {mounted && (
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              {theme === 'light' && <Sun className="mr-2 h-4 w-4" />}
+              {theme === 'dark' && <Moon className="mr-2 h-4 w-4" />}
+              {theme === 'system' && <Laptop className="mr-2 h-4 w-4" />}
+              <span>Theme</span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuPortal>
+              <DropdownMenuSubContent>
+                <DropdownMenuItem onClick={() => setTheme("light")}>
+                  <Sun className="mr-2 h-4 w-4" />
+                  Light
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setTheme("dark")}>
+                  <Moon className="mr-2 h-4 w-4" />
+                  Dark
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setTheme("system")}>
+                  <Laptop className="mr-2 h-4 w-4" />
+                  System
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuPortal>
+          </DropdownMenuSub>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={signOut} className="cursor-pointer text-red-600 focus:text-red-600 focus:bg-red-50 dark:text-red-400 dark:focus:text-red-400 dark:focus:bg-red-900/50">
           <LogOut className="mr-2 h-4 w-4" />
