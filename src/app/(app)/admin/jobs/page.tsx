@@ -1,7 +1,6 @@
-
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
@@ -10,7 +9,7 @@ import * as z from "zod";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Wrench, PlusCircle, Eye, Edit, Trash2, User, CalendarDays, ListOrdered, Loader2, Search, Building, UserCheck, Save } from "lucide-react";
+import { Wrench, PlusCircle, Eye, Edit, Trash2, User, CalendarDays, ListOrdered, Loader2, Search as SearchIcon, Building, UserCheck, Save } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -18,7 +17,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -147,6 +145,7 @@ export default function AdminJobsPage() {
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [jobToDelete, setJobToDelete] = useState<Job | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
 
   const canManageJobs = userProfile?.role === "admin";
 
@@ -175,26 +174,28 @@ export default function AdminJobsPage() {
 
   const fetchTechnicians = useCallback(async () => {
     if (userProfile?.role !== 'admin') {
-      setTechnicians([]);
-      return;
+        setTechnicians([]);
+        return;
     }
     try {
-      const usersCollectionRef = collection(db, "users");
-      // Fetch all users and filter/sort client-side to avoid composite index errors if not set up.
-      // FOR PERFORMANCE: Create a composite index in Firestore: collection 'users', fields 'role' (asc) and 'displayName' (asc).
-      const querySnapshot = await getDocs(usersCollectionRef);
-      let fetchedUsers = querySnapshot.docs.map(doc => ({ id: doc.id, uid: doc.id, ...doc.data() } as UserProfile));
-      
-      const fetchedTechnicians = fetchedUsers
-        .filter(user => user.role === "technician")
-        .sort((a, b) => (a.displayName || "").localeCompare(b.displayName || "")) as Technician[];
-      
-      setTechnicians(fetchedTechnicians);
+        const usersCollectionRef = collection(db, "users");
+        // Fetch all users and filter/sort client-side.
+        // RECOMMENDED: Create a composite index in Firestore: users collection, fields 'role' (asc) and 'displayName' (asc) for better performance.
+        const querySnapshot = await getDocs(usersCollectionRef);
+        let fetchedUsers = querySnapshot.docs.map(doc => ({ id: doc.id, uid: doc.id, ...doc.data() } as UserProfile));
+        
+        const fetchedTechnicians = fetchedUsers
+            .filter(user => user.role === "technician")
+            .sort((a, b) => (a.displayName || "").localeCompare(b.displayName || "")) as Technician[];
+        
+        setTechnicians(fetchedTechnicians);
     } catch (error) {
-      console.error("Error fetching technicians: ", error);
-      toast({ title: "Error", description: "Failed to fetch technicians.", variant: "destructive" });
+        console.error("Error fetching technicians: ", error);
+        // Do not toast here if it's related to index, or make it a less intrusive info toast.
+        // toast({ title: "Technician Fetch Info", description: "Could not optimally fetch technicians. Ensure Firestore indexes are set for 'users' collection on 'role' and 'displayName'.", variant: "default" });
     }
   }, [toast, userProfile]);
+
 
   const fetchJobs = useCallback(async () => {
     if (!userProfile) return;
@@ -207,10 +208,6 @@ export default function AdminJobsPage() {
       if (userProfile.role === 'admin') {
         q = query(jobsCollectionRef, orderBy("dateCreated", "desc"));
       } else if (userProfile.role === 'technician') {
-        // Query only by assignedTechnicianId to avoid complex index requirements for now.
-        // Sorting will be done client-side.
-        // RECOMMENDED: Create a composite index in Firestore for jobs:
-        // assignedTechnicianId (ASC), scheduledDate (DESC), dateCreated (DESC) for optimal performance.
         q = query(jobsCollectionRef, where("assignedTechnicianId", "==", userProfile.uid));
       } else {
         setJobs([]);
@@ -221,25 +218,17 @@ export default function AdminJobsPage() {
       const querySnapshot = await getDocs(q);
       let fetchedJobs = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Job));
 
-      // Client-side sorting for technicians if composite index for sorting is not available
       if (userProfile.role === 'technician') {
         fetchedJobs.sort((a, b) => {
-          // Sort by scheduledDate (descending, nulls last)
           if (a.scheduledDate && b.scheduledDate) {
             if (b.scheduledDate.toMillis() !== a.scheduledDate.toMillis()) {
               return b.scheduledDate.toMillis() - a.scheduledDate.toMillis();
             }
-          } else if (a.scheduledDate) {
-            return -1; // a comes first (b is null)
-          } else if (b.scheduledDate) {
-            return 1;  // b comes first (a is null)
-          }
-
-          // Then sort by dateCreated (descending)
+          } else if (a.scheduledDate) { return -1; } 
+          else if (b.scheduledDate) { return 1; }
           return b.dateCreated.toMillis() - a.dateCreated.toMillis();
         });
       }
-
       setJobs(fetchedJobs);
     } catch (error) {
       console.error("Error fetching jobs: ", error);
@@ -290,7 +279,7 @@ export default function AdminJobsPage() {
     try {
         const invoiceNumber = await generateInvoiceNumber();
         let lineItems: InvoiceLineItem[] = [];
-        let taxRate = 0.0; // Default tax rate
+        let taxRate = 0.0; 
 
         if (job.estimateId) {
             const estimateDocSnap = await getDoc(doc(db, "estimates", job.estimateId));
@@ -397,7 +386,7 @@ export default function AdminJobsPage() {
         const jobDocRef = doc(db, "jobs", selectedJob.id);
         await updateDoc(jobDocRef, {...jobDataForDb, lastUpdated: serverTimestamp() as Timestamp});
         toast({ title: "Job Updated", description: `Job ${selectedJob.jobNumber} has been updated.` });
-        finalJobData = { ...selectedJob, ...jobDataForDb, status: values.status, lastUpdated: Timestamp.now() };
+        finalJobData = { ...selectedJob, ...jobDataForDb, status: values.status, lastUpdated: Timestamp.now() } as Job;
 
       } else {
         const jobNumber = await generateJobNumber();
@@ -529,6 +518,18 @@ export default function AdminJobsPage() {
     }
   }
 
+  const filteredJobs = useMemo(() => {
+    if (!searchTerm) return jobs;
+    return jobs.filter(job =>
+      job.jobNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      job.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (job.technicianName && job.technicianName.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      job.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      job.status.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (job.estimateId && job.estimateId.toLowerCase().includes(searchTerm.toLowerCase()))
+    );
+  }, [jobs, searchTerm]);
+
   if (authLoading || !userProfile) {
     return <div className="flex h-screen items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="ml-2">Loading...</p></div>;
   }
@@ -540,12 +541,7 @@ export default function AdminJobsPage() {
     <div className="space-y-6">
       {canManageJobs && (
       <Dialog open={isFormDialogOpen} onOpenChange={(isOpen) => { setIsFormDialogOpen(isOpen); if (!isOpen) setSelectedJob(null); }}>
-        <DialogTrigger asChild>
-            <Button onClick={() => handleOpenFormDialog()}>
-            <PlusCircle className="mr-2 h-4 w-4" /> Create New Job
-            </Button>
-        </DialogTrigger>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="sm:max-w-2xl rounded-lg">
           <DialogHeader>
             <DialogTitle>{selectedJob ? "Edit Job" : "Create New Job"} {selectedJob?.jobNumber && `(${selectedJob.jobNumber})`}</DialogTitle>
             <DialogDescription>
@@ -560,12 +556,12 @@ export default function AdminJobsPage() {
                   <FormControl>
                     <Popover>
                       <PopoverTrigger asChild>
-                        <Button variant="outline" role="combobox" className={cn("w-full justify-between", !field.value && "text-muted-foreground")}>
+                        <Button variant="outline" role="combobox" className={cn("w-full justify-between rounded-md", !field.value && "text-muted-foreground")}>
                           {field.value ? customers.find(c => c.id === field.value)?.companyName : "Select customer"}
-                          <Search className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                          <SearchIcon className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                         </Button>
                       </PopoverTrigger>
-                      <PopoverContent className="w-[--radix-popover-trigger-width] max-h-[300px] overflow-y-auto p-0">
+                      <PopoverContent className="w-[--radix-popover-trigger-width] max-h-[300px] overflow-y-auto p-0 rounded-md">
                         {customers.map(customer => (
                           <div key={customer.id} onClick={() => {adminForm.setValue("customerId", customer.id, {shouldValidate: true}); (document.activeElement as HTMLElement)?.blur(); }}
                                className="cursor-pointer p-2 hover:bg-accent hover:text-accent-foreground">
@@ -586,12 +582,12 @@ export default function AdminJobsPage() {
                   <FormControl>
                     <Popover>
                       <PopoverTrigger asChild>
-                        <Button variant="outline" role="combobox" className={cn("w-full justify-between", !field.value && "text-muted-foreground")}>
+                        <Button variant="outline" role="combobox" className={cn("w-full justify-between rounded-md", !field.value && "text-muted-foreground")}>
                           {field.value ? technicians.find(t => t.uid === field.value)?.displayName : "Select technician"}
                           <UserCheck className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                         </Button>
                       </PopoverTrigger>
-                      <PopoverContent className="w-[--radix-popover-trigger-width] max-h-[300px] overflow-y-auto p-0">
+                      <PopoverContent className="w-[--radix-popover-trigger-width] max-h-[300px] overflow-y-auto p-0 rounded-md">
                         <div onClick={() => {adminForm.setValue("assignedTechnicianId", null, {shouldValidate: true}); (document.activeElement as HTMLElement)?.blur(); }}
                              className="cursor-pointer p-2 hover:bg-accent hover:text-accent-foreground text-muted-foreground italic">
                             None
@@ -611,7 +607,7 @@ export default function AdminJobsPage() {
               )} />
 
               <FormField control={adminForm.control} name="description" render={({ field }) => (
-                <FormItem> <FormLabel>Job Description</FormLabel> <FormControl><Textarea placeholder="Detailed description of the work to be done..." {...field} /></FormControl> <FormMessage /> </FormItem>
+                <FormItem> <FormLabel>Job Description</FormLabel> <FormControl><Textarea placeholder="Detailed description of the work to be done..." {...field} className="rounded-md" /></FormControl> <FormMessage /> </FormItem>
               )} />
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -619,11 +615,11 @@ export default function AdminJobsPage() {
                     <FormItem> <FormLabel>Status</FormLabel>
                         <ShadSelect onValueChange={field.onChange} value={field.value}>
                             <FormControl>
-                                <SelectTrigger>
+                                <SelectTrigger className="rounded-md">
                                     <SelectValue placeholder="Select job status" />
                                 </SelectTrigger>
                             </FormControl>
-                            <SelectContent>
+                            <SelectContent className="rounded-md">
                                 {ALL_JOB_STATUSES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
                             </SelectContent>
                         </ShadSelect>
@@ -635,13 +631,13 @@ export default function AdminJobsPage() {
                     <Popover>
                       <PopoverTrigger asChild>
                         <FormControl>
-                          <Button variant={"outline"} className={cn("pl-3 text-left font-normal", !field.value && "text-muted-foreground")}>
+                          <Button variant={"outline"} className={cn("pl-3 text-left font-normal rounded-md", !field.value && "text-muted-foreground")}>
                             {field.value ? format(field.value, "PPP") : <span>Pick a date</span>}
                             <CalendarDays className="ml-auto h-4 w-4 opacity-50" />
                           </Button>
                         </FormControl>
                       </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0" align="start">
+                      <PopoverContent className="w-auto p-0 rounded-md" align="start">
                         <Calendar mode="single" selected={field.value} onSelect={(date) => {field.onChange(date); (document.activeElement as HTMLElement)?.blur();}} initialFocus />
                       </PopoverContent>
                     </Popover>
@@ -649,20 +645,20 @@ export default function AdminJobsPage() {
                   </FormItem>
                 )} />
               </div>
-               <FormField control={adminForm.control} name="estimateId" render={({ field }) => ( <FormItem> <FormLabel>Related Estimate ID (Optional)</FormLabel> <FormControl><Input placeholder="e.g., EST-20230101-001" {...field} value={field.value ?? ""} /></FormControl> <FormMessage /> </FormItem> )} />
+               <FormField control={adminForm.control} name="estimateId" render={({ field }) => ( <FormItem> <FormLabel>Related Estimate ID (Optional)</FormLabel> <FormControl><Input placeholder="e.g., EST-20230101-001" {...field} value={field.value ?? ""} className="rounded-md" /></FormControl> <FormMessage /> </FormItem> )} />
 
               <FormField control={adminForm.control} name="notes" render={({ field }) => (
-                <FormItem> <FormLabel>Customer Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Notes visible to the customer..." {...field} value={field.value ?? ""} /></FormControl> <FormMessage /> </FormItem>
+                <FormItem> <FormLabel>Customer Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Notes visible to the customer..." {...field} value={field.value ?? ""} className="rounded-md" /></FormControl> <FormMessage /> </FormItem>
               )} />
               {canManageJobs &&
                 <FormField control={adminForm.control} name="internalNotes" render={({ field }) => (
-                  <FormItem> <FormLabel>Internal Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Internal notes for staff and technicians..." {...field} value={field.value ?? ""} /></FormControl> <FormMessage /> </FormItem>
+                  <FormItem> <FormLabel>Internal Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Internal notes for staff and technicians..." {...field} value={field.value ?? ""} className="rounded-md" /></FormControl> <FormMessage /> </FormItem>
                 )} />
               }
 
               <DialogFooter className="pt-4">
-                <Button type="button" variant="outline" onClick={() => {setIsFormDialogOpen(false); setSelectedJob(null);}}>Cancel</Button>
-                <Button type="submit" disabled={isSubmitting}>
+                <Button type="button" variant="outline" onClick={() => {setIsFormDialogOpen(false); setSelectedJob(null);}} className="rounded-md">Cancel</Button>
+                <Button type="submit" disabled={isSubmitting} className="rounded-md">
                   {isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : (selectedJob ? "Save Changes" : "Create Job")}
                 </Button>
               </DialogFooter>
@@ -673,7 +669,7 @@ export default function AdminJobsPage() {
       )}
 
       <Dialog open={isViewDialogOpen} onOpenChange={(isOpen) => { setIsViewDialogOpen(isOpen); if (!isOpen) setSelectedJob(null); }}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-lg rounded-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center">
               <Wrench className="mr-2 h-6 w-6 text-primary" />
@@ -713,11 +709,11 @@ export default function AdminJobsPage() {
                                 <FormLabel>New Status</FormLabel>
                                 <ShadSelect onValueChange={field.onChange} defaultValue={field.value}>
                                     <FormControl>
-                                        <SelectTrigger>
+                                        <SelectTrigger className="rounded-md">
                                             <SelectValue placeholder="Select new status" />
                                         </SelectTrigger>
                                     </FormControl>
-                                    <SelectContent>
+                                    <SelectContent className="rounded-md">
                                     {ALL_JOB_STATUSES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
                                     </SelectContent>
                                 </ShadSelect>
@@ -732,13 +728,13 @@ export default function AdminJobsPage() {
                                 <FormItem>
                                 <FormLabel>Update Notes (Optional)</FormLabel>
                                 <FormControl>
-                                    <Textarea placeholder="Add any notes about this status update..." {...field} value={field.value ?? ""} />
+                                    <Textarea placeholder="Add any notes about this status update..." {...field} value={field.value ?? ""} className="rounded-md" />
                                 </FormControl>
                                 <FormMessage />
                                 </FormItem>
                             )}
                         />
-                        <Button type="submit" disabled={isSubmitting || (selectedJob.status === 'Completed' && selectedJob.invoiceCreated) } size="sm">
+                        <Button type="submit" disabled={isSubmitting || (selectedJob.status === 'Completed' && selectedJob.invoiceCreated) } size="sm" className="rounded-md">
                             {isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving Status...</> : <><Save className="mr-2 h-4 w-4" />Save Status Update</>}
                         </Button>
                     </form>
@@ -761,9 +757,9 @@ export default function AdminJobsPage() {
             </div>
           )}
           <DialogFooter className="pt-4">
-            <Button variant="outline" onClick={() => setIsViewDialogOpen(false)}>Close</Button>
+            <Button variant="outline" onClick={() => setIsViewDialogOpen(false)} className="rounded-md">Close</Button>
             {canManageJobs && selectedJob &&
-              <Button onClick={() => { setIsViewDialogOpen(false); handleOpenFormDialog(selectedJob); }} disabled={selectedJob.status === 'Completed' && selectedJob.invoiceCreated}>
+              <Button onClick={() => { setIsViewDialogOpen(false); handleOpenFormDialog(selectedJob); }} disabled={selectedJob.status === 'Completed' && selectedJob.invoiceCreated} className="rounded-md">
                   <Edit className="mr-2 h-4 w-4" /> Edit Job
               </Button>
             }
@@ -773,7 +769,7 @@ export default function AdminJobsPage() {
 
       {canManageJobs && (
         <AlertDialog open={!!jobToDelete} onOpenChange={(open) => !open && setJobToDelete(null)}>
-            <AlertDialogContent>
+            <AlertDialogContent className="rounded-lg">
             <AlertDialogHeader>
                 <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
                 <AlertDialogDescription>
@@ -781,11 +777,11 @@ export default function AdminJobsPage() {
                 </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-                <AlertDialogCancel onClick={() => setJobToDelete(null)}>Cancel</AlertDialogCancel>
+                <AlertDialogCancel onClick={() => setJobToDelete(null)} className="rounded-md">Cancel</AlertDialogCancel>
                 <AlertDialogAction
                 onClick={confirmDeleteJob}
                 disabled={isSubmitting}
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90 rounded-md"
                 >
                 {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                 Yes, delete job
@@ -795,7 +791,7 @@ export default function AdminJobsPage() {
         </AlertDialog>
       )}
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">
             {userProfile?.role === 'admin' ? "Job Management" : "My Assigned Jobs"}
@@ -804,24 +800,41 @@ export default function AdminJobsPage() {
             {userProfile?.role === 'admin' ? "Oversee and manage all service jobs." : "View and manage your assigned service jobs."}
           </p>
         </div>
+        {canManageJobs && (
+            <div className="flex items-center gap-4">
+                <div className="relative w-64">
+                    <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                        type="search"
+                        placeholder="Search jobs..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="pl-10 rounded-md bg-card"
+                    />
+                </div>
+                <Button onClick={() => handleOpenFormDialog()} className="rounded-md">
+                    <PlusCircle className="mr-2 h-4 w-4" /> Create New Job
+                </Button>
+            </div>
+        )}
       </div>
 
-      <Card className="shadow-lg">
-        <CardHeader>
-          <CardTitle className="flex items-center">
+      <Card className="shadow-lg rounded-xl">
+        <CardHeader className="border-b">
+          <CardTitle className="flex items-center text-xl">
             <Wrench className="mr-2 h-5 w-5 text-primary" />
-            {userProfile?.role === 'admin' ? `Current Jobs (${jobs.length})` : `My Jobs (${jobs.length})`}
+            {userProfile?.role === 'admin' ? `Current Jobs (${filteredJobs.length})` : `My Jobs (${filteredJobs.length})`}
           </CardTitle>
           <CardDescription>
             {userProfile?.role === 'admin' ? "Browse and manage all service jobs in the system." : "Details of jobs assigned to you."}
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0">
           {isLoading ? (
             <div className="flex items-center justify-center py-10">
               <Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="ml-2">Loading jobs...</p>
             </div>
-          ) : jobs.length > 0 ? (
+          ) : filteredJobs.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-border">
                 <thead className="bg-muted/50">
@@ -837,7 +850,7 @@ export default function AdminJobsPage() {
                   </tr>
                 </thead>
                 <tbody className="bg-background divide-y divide-border">
-                  {jobs.map((job) => (
+                  {filteredJobs.map((job) => (
                     <tr key={job.id} className="hover:bg-muted/30 transition-colors">
                       <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-primary">{job.jobNumber}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm">{job.customerName}</td>
@@ -849,11 +862,11 @@ export default function AdminJobsPage() {
                         <Badge variant={getStatusBadgeVariant(job.status)}>{job.status}</Badge>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm text-right space-x-2">
-                        <Button variant="outline" size="sm" onClick={() => handleViewJob(job)}><Eye className="mr-1 h-3 w-3" /> View</Button>
+                        <Button variant="outline" size="sm" onClick={() => handleViewJob(job)} className="rounded-md"><Eye className="mr-1 h-3 w-3" /> View</Button>
                         {canManageJobs && (
                           <>
-                          <Button variant="outline" size="sm" onClick={() => handleOpenFormDialog(job)} disabled={job.status === 'Completed' && job.invoiceCreated}><Edit className="mr-1 h-3 w-3" /> Edit</Button>
-                          <Button variant="destructive" size="sm" onClick={() => handleDeleteJob(job)} disabled={job.status === 'Completed' && job.invoiceCreated}><Trash2 className="mr-1 h-3 w-3" /> Delete</Button>
+                          <Button variant="outline" size="sm" onClick={() => handleOpenFormDialog(job)} disabled={job.status === 'Completed' && job.invoiceCreated} className="rounded-md"><Edit className="mr-1 h-3 w-3" /> Edit</Button>
+                          <Button variant="destructive" size="sm" onClick={() => handleDeleteJob(job)} disabled={job.status === 'Completed' && job.invoiceCreated} className="rounded-md"><Trash2 className="mr-1 h-3 w-3" /> Delete</Button>
                           </>
                         )}
                       </td>
@@ -865,9 +878,9 @@ export default function AdminJobsPage() {
           ) : (
             <div className="text-center py-10">
               <Wrench className="mx-auto h-12 w-12 text-muted-foreground" />
-              <p className="mt-2 text-sm font-medium text-muted-foreground">No jobs found.</p>
-              {canManageJobs && <p className="mt-1 text-xs text-muted-foreground">Click "Create New Job" to get started.</p>}
-              {userProfile?.role === 'technician' && <p className="mt-1 text-xs text-muted-foreground">You currently have no jobs assigned to you.</p>}
+              <p className="mt-2 text-sm font-medium text-muted-foreground">No jobs found{searchTerm && " matching your search"}.</p>
+              {canManageJobs && !searchTerm && <p className="mt-1 text-xs text-muted-foreground">Click "Create New Job" to get started.</p>}
+              {userProfile?.role === 'technician' && !searchTerm && <p className="mt-1 text-xs text-muted-foreground">You currently have no jobs assigned to you.</p>}
             </div>
           )}
         </CardContent>

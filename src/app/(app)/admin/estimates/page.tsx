@@ -1,7 +1,7 @@
 
 "use client";
 
-import React from "react"; 
+import React, { useMemo } from "react"; 
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useCallback } from "react"; // Added useCallback
@@ -11,7 +11,7 @@ import * as z from "zod";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { FileText, PlusCircle, Eye, Edit, Trash2, DollarSign, User, CalendarDays, Percent, ListOrdered, Loader2, Search } from "lucide-react";
+import { FileText, PlusCircle, Eye, Edit, Trash2, DollarSign, User, CalendarDays, Percent, ListOrdered, Loader2, Search as SearchIcon } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -19,7 +19,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -142,6 +141,7 @@ export default function AdminEstimatesPage() {
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
   const [selectedEstimate, setSelectedEstimate] = useState<Estimate | null>(null);
   const [estimateToDelete, setEstimateToDelete] = useState<Estimate | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
 
   const canManageEstimates = userProfile && ["admin", "sales"].includes(userProfile.role);
 
@@ -268,12 +268,11 @@ export default function AdminEstimatesPage() {
       };
       await addDoc(collection(db, "jobs"), newJobData);
       
-      // Mark job as created on the estimate
       const estimateDocRef = doc(db, "estimates", estimateId);
       await updateDoc(estimateDocRef, { jobCreated: true, lastUpdated: serverTimestamp() });
 
       toast({ title: "Job Created", description: `Job ${jobNumber} automatically created from estimate ${estimate.estimateNumber}.` });
-      fetchEstimates(); // Refresh estimates to show jobCreated status
+      fetchEstimates(); 
     } catch (error) {
       console.error("Error creating job from estimate: ", error);
       toast({ title: "Job Creation Error", description: "Failed to automatically create job.", variant: "destructive" });
@@ -319,12 +318,12 @@ export default function AdminEstimatesPage() {
       let savedEstimateId = selectedEstimate?.id;
       let finalEstimateData: Estimate;
 
-      if (selectedEstimate) { // Editing
+      if (selectedEstimate) { 
         const estimateDocRef = doc(db, "estimates", selectedEstimate.id);
         await updateDoc(estimateDocRef, { ...estimateDataForDb, lastUpdated: serverTimestamp() as Timestamp }); 
         toast({ title: "Estimate Updated", description: `Estimate ${selectedEstimate.estimateNumber} has been updated.` });
         finalEstimateData = { ...selectedEstimate, ...estimateDataForDb, status: values.status, lastUpdated: Timestamp.now() };
-      } else { // Adding
+      } else { 
         const estimateNumber = await generateEstimateNumber();
         const newEstimateDataWithTimestamps = {
             ...estimateDataForDb,
@@ -336,16 +335,14 @@ export default function AdminEstimatesPage() {
         const docRef = await addDoc(collection(db, "estimates"), newEstimateDataWithTimestamps);
         savedEstimateId = docRef.id;
         toast({ title: "Estimate Created", description: `Estimate ${estimateNumber} has been created.` });
-        // For automation, construct what the saved estimate would look like
         finalEstimateData = { 
             ...newEstimateDataWithTimestamps, 
             id: docRef.id, 
-            dateCreated: Timestamp.now(), // Approximate for immediate use
-            lastUpdated: Timestamp.now(), // Approximate for immediate use
+            dateCreated: Timestamp.now(), 
+            lastUpdated: Timestamp.now(), 
         } as Estimate;
       }
       
-      // Automation: Create job if status is "Accepted"
       if (values.status === "Accepted" && savedEstimateId) {
         const estimateToCreateJobFrom = selectedEstimate ? 
           { ...selectedEstimate, ...estimateDataForDb, status: values.status, lastUpdated: Timestamp.now() } : 
@@ -428,6 +425,17 @@ export default function AdminEstimatesPage() {
     return currentSubtotal + currentTaxAmount;
   }, [currentSubtotal, currentTaxAmount]);
 
+  const filteredEstimates = useMemo(() => {
+    if (!searchTerm) return estimates;
+    return estimates.filter(est =>
+      est.estimateNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      est.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (est.customerEmail && est.customerEmail.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      est.status.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      est.totalAmount.toString().includes(searchTerm)
+    );
+  }, [estimates, searchTerm]);
+
 
   if (authLoading || !userProfile) {
     return <div className="flex h-screen items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="ml-2">Loading...</p></div>;
@@ -439,12 +447,7 @@ export default function AdminEstimatesPage() {
   return (
     <div className="space-y-6">
       <Dialog open={isFormDialogOpen} onOpenChange={(isOpen) => { setIsFormDialogOpen(isOpen); if (!isOpen) setSelectedEstimate(null); }}>
-        <DialogTrigger asChild>
-          <Button onClick={() => handleOpenFormDialog()}>
-            <PlusCircle className="mr-2 h-4 w-4" /> Create New Estimate
-          </Button>
-        </DialogTrigger>
-        <DialogContent className="sm:max-w-3xl">
+        <DialogContent className="sm:max-w-3xl rounded-lg">
           <DialogHeader>
             <DialogTitle>{selectedEstimate ? "Edit Estimate" : "Create New Estimate"} {selectedEstimate?.estimateNumber && `(${selectedEstimate.estimateNumber})`}</DialogTitle>
             <DialogDescription>
@@ -459,12 +462,12 @@ export default function AdminEstimatesPage() {
                   <FormControl>
                     <Popover>
                       <PopoverTrigger asChild>
-                        <Button variant="outline" role="combobox" className={cn("w-full justify-between", !field.value && "text-muted-foreground")}>
+                        <Button variant="outline" role="combobox" className={cn("w-full justify-between rounded-md", !field.value && "text-muted-foreground")}>
                           {field.value ? customers.find(c => c.id === field.value)?.companyName : "Select customer"}
-                          <Search className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                          <SearchIcon className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                         </Button>
                       </PopoverTrigger>
-                      <PopoverContent className="w-[--radix-popover-trigger-width] max-h-[300px] overflow-y-auto p-0">
+                      <PopoverContent className="w-[--radix-popover-trigger-width] max-h-[300px] overflow-y-auto p-0 rounded-md">
                         {customers.map(customer => (
                           <div key={customer.id} onClick={() => {form.setValue("customerId", customer.id, {shouldValidate: true}); (document.activeElement as HTMLElement)?.blur(); }}
                                className="cursor-pointer p-2 hover:bg-accent hover:text-accent-foreground">
@@ -486,13 +489,13 @@ export default function AdminEstimatesPage() {
                     <Popover>
                       <PopoverTrigger asChild>
                         <FormControl>
-                          <Button variant={"outline"} className={cn("pl-3 text-left font-normal", !field.value && "text-muted-foreground")}>
+                          <Button variant={"outline"} className={cn("pl-3 text-left font-normal rounded-md", !field.value && "text-muted-foreground")}>
                             {field.value ? format(field.value, "PPP") : <span>Pick a date</span>}
                             <CalendarDays className="ml-auto h-4 w-4 opacity-50" />
                           </Button>
                         </FormControl>
                       </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0" align="start">
+                      <PopoverContent className="w-auto p-0 rounded-md" align="start">
                         <Calendar mode="single" selected={field.value} onSelect={(date) => {field.onChange(date); (document.activeElement as HTMLElement)?.blur();}} initialFocus />
                       </PopoverContent>
                     </Popover>
@@ -511,26 +514,26 @@ export default function AdminEstimatesPage() {
               <div className="space-y-3">
                 <FormLabel>Line Items</FormLabel>
                 {lineItemFields.map((item, index) => (
-                  <Card key={item.id || index} className="p-3 bg-muted/30 relative">
+                  <Card key={item.id || index} className="p-3 bg-muted/30 relative rounded-md">
                     <div className="grid grid-cols-12 gap-2 items-end">
                       <FormField control={form.control} name={`lineItems.${index}.description`} render={({ field }) => (
                         <FormItem className="col-span-5">
                           {index === 0 && <FormLabel className="text-xs">Description</FormLabel>}
-                          <FormControl><Input placeholder="Service or item" {...field} /></FormControl>
+                          <FormControl><Input placeholder="Service or item" {...field} className="rounded-md" /></FormControl>
                           <FormMessage />
                         </FormItem>
                       )} />
                       <FormField control={form.control} name={`lineItems.${index}.quantity`} render={({ field }) => (
                         <FormItem className="col-span-2">
                            {index === 0 && <FormLabel className="text-xs">Qty</FormLabel>}
-                          <FormControl><Input type="number" placeholder="1" {...field} onChange={e => { field.onChange(e); updateLineItem(index, { quantity: parseFloat(e.target.value) || 0 }) }} /></FormControl>
+                          <FormControl><Input type="number" placeholder="1" {...field} onChange={e => { field.onChange(e); updateLineItem(index, { quantity: parseFloat(e.target.value) || 0 }) }} className="rounded-md" /></FormControl>
                            <FormMessage />
                         </FormItem>
                       )} />
                        <FormField control={form.control} name={`lineItems.${index}.unitPrice`} render={({ field }) => (
                         <FormItem className="col-span-2">
                            {index === 0 && <FormLabel className="text-xs">Unit Price</FormLabel>}
-                          <FormControl><Input type="number" placeholder="0.00" {...field} onChange={e => { field.onChange(e); updateLineItem(index, { unitPrice: parseFloat(e.target.value) || 0 }) }} /></FormControl>
+                          <FormControl><Input type="number" placeholder="0.00" {...field} onChange={e => { field.onChange(e); updateLineItem(index, { unitPrice: parseFloat(e.target.value) || 0 }) }} className="rounded-md" /></FormControl>
                            <FormMessage />
                         </FormItem>
                       )} />
@@ -541,7 +544,7 @@ export default function AdminEstimatesPage() {
                       </div>
                       <div className="col-span-1 flex items-center">
                         {lineItemFields.length > 1 && (
-                          <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive" onClick={() => removeLineItem(index)}>
+                          <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:text-destructive rounded-md" onClick={() => removeLineItem(index)}>
                             <Trash2 className="h-4 w-4" />
                           </Button>
                         )}
@@ -549,7 +552,7 @@ export default function AdminEstimatesPage() {
                     </div>
                   </Card>
                 ))}
-                <Button type="button" variant="outline" size="sm" onClick={() => appendLineItem({ description: "", quantity: 1, unitPrice: 0 })}>
+                <Button type="button" variant="outline" size="sm" onClick={() => appendLineItem({ description: "", quantity: 1, unitPrice: 0 })} className="rounded-md">
                   <PlusCircle className="mr-2 h-4 w-4" /> Add Line Item
                 </Button>
                 {form.formState.errors.lineItems && typeof form.formState.errors.lineItems === 'object' && 'message' in form.formState.errors.lineItems && (
@@ -563,7 +566,7 @@ export default function AdminEstimatesPage() {
                   <FormItem> <FormLabel>Tax Rate (e.g., 0.08 for 8%)</FormLabel>
                     <div className="relative">
                         <Percent className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <FormControl><Input type="number" step="0.001" placeholder="0.00" {...field} onChange={e => field.onChange(parseFloat(e.target.value) || 0)} className="pl-10" /></FormControl>
+                        <FormControl><Input type="number" step="0.001" placeholder="0.00" {...field} onChange={e => field.onChange(parseFloat(e.target.value) || 0)} className="pl-10 rounded-md" /></FormControl>
                     </div>
                     <FormMessage />
                   </FormItem>
@@ -576,12 +579,12 @@ export default function AdminEstimatesPage() {
               </div>
 
               <FormField control={form.control} name="notes" render={({ field }) => (
-                <FormItem> <FormLabel>Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Any additional notes for the customer or internal remarks..." {...field} value={field.value ?? ""} /></FormControl> <FormMessage /> </FormItem>
+                <FormItem> <FormLabel>Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Any additional notes for the customer or internal remarks..." {...field} value={field.value ?? ""} className="rounded-md" /></FormControl> <FormMessage /> </FormItem>
               )} />
 
               <DialogFooter className="pt-4">
-                <Button type="button" variant="outline" onClick={() => {setIsFormDialogOpen(false); setSelectedEstimate(null);}}>Cancel</Button>
-                <Button type="submit" disabled={isSubmitting}>
+                <Button type="button" variant="outline" onClick={() => {setIsFormDialogOpen(false); setSelectedEstimate(null);}} className="rounded-md">Cancel</Button>
+                <Button type="submit" disabled={isSubmitting} className="rounded-md">
                   {isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : (selectedEstimate ? "Save Changes" : "Create Estimate")}
                 </Button>
               </DialogFooter>
@@ -591,7 +594,7 @@ export default function AdminEstimatesPage() {
       </Dialog>
 
       <Dialog open={isViewDialogOpen} onOpenChange={(isOpen) => { setIsViewDialogOpen(isOpen); if (!isOpen) setSelectedEstimate(null); }}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="sm:max-w-2xl rounded-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center">
               <FileText className="mr-2 h-6 w-6 text-primary" />
@@ -639,8 +642,8 @@ export default function AdminEstimatesPage() {
             </div>
           )}
           <DialogFooter className="pt-4">
-            <Button variant="outline" onClick={() => setIsViewDialogOpen(false)}>Close</Button>
-            <Button onClick={() => { if(selectedEstimate) { setIsViewDialogOpen(false); handleOpenFormDialog(selectedEstimate); } }} disabled={selectedEstimate?.status === 'Accepted' && selectedEstimate?.jobCreated}>
+            <Button variant="outline" onClick={() => setIsViewDialogOpen(false)} className="rounded-md">Close</Button>
+            <Button onClick={() => { if(selectedEstimate) { setIsViewDialogOpen(false); handleOpenFormDialog(selectedEstimate); } }} disabled={selectedEstimate?.status === 'Accepted' && selectedEstimate?.jobCreated} className="rounded-md">
                 <Edit className="mr-2 h-4 w-4" /> Edit Estimate
             </Button>
           </DialogFooter>
@@ -648,7 +651,7 @@ export default function AdminEstimatesPage() {
       </Dialog>
       
       <AlertDialog open={!!estimateToDelete} onOpenChange={(open) => !open && setEstimateToDelete(null)}>
-        <AlertDialogContent>
+        <AlertDialogContent className="rounded-lg">
           <AlertDialogHeader>
             <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -656,11 +659,11 @@ export default function AdminEstimatesPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setEstimateToDelete(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel onClick={() => setEstimateToDelete(null)} className="rounded-md">Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={confirmDeleteEstimate}
               disabled={isSubmitting}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90 rounded-md"
             >
               {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Yes, delete estimate
@@ -669,27 +672,42 @@ export default function AdminEstimatesPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Estimate Management</h1>
           <p className="text-muted-foreground">Create, view, and manage service estimates.</p>
         </div>
+         <div className="flex items-center gap-4">
+             <div className="relative w-64">
+                <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                    type="search"
+                    placeholder="Search estimates..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="pl-10 rounded-md bg-card"
+                />
+            </div>
+            <Button onClick={() => handleOpenFormDialog()} className="rounded-md">
+                <PlusCircle className="mr-2 h-4 w-4" /> Create New Estimate
+            </Button>
+        </div>
       </div>
       
-      <Card className="shadow-lg">
-        <CardHeader>
-          <CardTitle className="flex items-center">
+      <Card className="shadow-lg rounded-xl">
+        <CardHeader className="border-b">
+          <CardTitle className="flex items-center text-xl">
             <FileText className="mr-2 h-5 w-5 text-primary" />
-            Current Estimates ({estimates.length})
+            Current Estimates ({filteredEstimates.length})
           </CardTitle>
           <CardDescription>Browse and manage all estimates in the system.</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0">
           {isLoading ? (
             <div className="flex items-center justify-center py-10">
               <Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="ml-2">Loading estimates...</p>
             </div>
-          ) : estimates.length > 0 ? (
+          ) : filteredEstimates.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-border">
                 <thead className="bg-muted/50">
@@ -703,7 +721,7 @@ export default function AdminEstimatesPage() {
                   </tr>
                 </thead>
                 <tbody className="bg-background divide-y divide-border">
-                  {estimates.map((estimate) => (
+                  {filteredEstimates.map((estimate) => (
                     <tr key={estimate.id} className="hover:bg-muted/30 transition-colors">
                       <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-primary">{estimate.estimateNumber}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm">{estimate.customerName}</td>
@@ -713,9 +731,9 @@ export default function AdminEstimatesPage() {
                         <Badge variant={getStatusBadgeVariant(estimate.status)}>{estimate.status}</Badge>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-sm text-right space-x-2">
-                        <Button variant="outline" size="sm" onClick={() => handleViewEstimate(estimate)}><Eye className="mr-1 h-3 w-3" /> View</Button>
-                        <Button variant="outline" size="sm" onClick={() => handleOpenFormDialog(estimate)} disabled={estimate.status === 'Accepted' && estimate.jobCreated}><Edit className="mr-1 h-3 w-3" /> Edit</Button>
-                        <Button variant="destructive" size="sm" onClick={() => handleDeleteEstimate(estimate)} disabled={estimate.status === 'Accepted' && estimate.jobCreated}><Trash2 className="mr-1 h-3 w-3" /> Delete</Button>
+                        <Button variant="outline" size="sm" onClick={() => handleViewEstimate(estimate)} className="rounded-md"><Eye className="mr-1 h-3 w-3" /> View</Button>
+                        <Button variant="outline" size="sm" onClick={() => handleOpenFormDialog(estimate)} disabled={estimate.status === 'Accepted' && estimate.jobCreated} className="rounded-md"><Edit className="mr-1 h-3 w-3" /> Edit</Button>
+                        <Button variant="destructive" size="sm" onClick={() => handleDeleteEstimate(estimate)} disabled={estimate.status === 'Accepted' && estimate.jobCreated} className="rounded-md"><Trash2 className="mr-1 h-3 w-3" /> Delete</Button>
                       </td>
                     </tr>
                   ))}
@@ -725,8 +743,8 @@ export default function AdminEstimatesPage() {
           ) : (
             <div className="text-center py-10">
               <FileText className="mx-auto h-12 w-12 text-muted-foreground" />
-              <p className="mt-2 text-sm font-medium text-muted-foreground">No estimates found.</p>
-              <p className="mt-1 text-xs text-muted-foreground">Click "Create New Estimate" to get started.</p>
+              <p className="mt-2 text-sm font-medium text-muted-foreground">No estimates found{searchTerm && " matching your search"}.</p>
+              {!searchTerm && <p className="mt-1 text-xs text-muted-foreground">Click "Create New Estimate" to get started.</p>}
             </div>
           )}
         </CardContent>
@@ -734,5 +752,3 @@ export default function AdminEstimatesPage() {
     </div>
   );
 }
-
-    
