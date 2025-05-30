@@ -25,7 +25,7 @@ import { useEffect, useState } from "react";
 
 export function UserNav() {
   const { userProfile, signOut } = useAuth();
-  const { theme, setTheme } = useTheme();
+  const { theme, setTheme, resolvedTheme } = useTheme(); // Added resolvedTheme
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -80,9 +80,9 @@ export function UserNav() {
          {mounted && (
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>
-              {theme === 'light' && <Sun className="mr-2 h-4 w-4" />}
-              {theme === 'dark' && <Moon className="mr-2 h-4 w-4" />}
-              {theme === 'system' && <Laptop className="mr-2 h-4 w-4" />}
+              {resolvedTheme === 'light' && <Sun className="mr-2 h-4 w-4" />}
+              {resolvedTheme === 'dark' && <Moon className="mr-2 h-4 w-4" />}
+              {theme === 'system' && resolvedTheme !== 'light' && resolvedTheme !== 'dark' && <Laptop className="mr-2 h-4 w-4" />}
               <span>Theme</span>
             </DropdownMenuSubTrigger>
             <DropdownMenuPortal>
