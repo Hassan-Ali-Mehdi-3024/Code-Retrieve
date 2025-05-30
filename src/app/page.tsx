@@ -1,9 +1,10 @@
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card"; // Ensure CardFooter is imported
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Briefcase, Zap, Users, Send, BarChart3, LogIn, Search, DollarSign, WrenchIcon, ArrowRight } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
+import { siteConfig } from "@/config/site";
 
 export default function HomePage() {
   const features = [
@@ -66,7 +67,7 @@ export default function HomePage() {
       <header className="container mx-auto py-6 px-4 md:px-6 flex justify-between items-center sticky top-0 z-50 bg-background/80 backdrop-blur-md">
         <Link href="/" className="flex items-center gap-2">
           <Briefcase className="h-8 w-8 text-primary" />
-          <span className="text-2xl font-bold text-primary">Luxe Maintainance CRM</span>
+          <span className="text-2xl font-bold text-primary">{siteConfig.name}</span>
         </Link>
         <nav className="space-x-2 sm:space-x-4">
           <Button variant="ghost" asChild>
@@ -85,10 +86,10 @@ export default function HomePage() {
         <section className="container mx-auto py-16 px-4 md:px-6 text-center">
           <div className="max-w-3xl mx-auto">
             <h1 className="text-4xl md:text-5xl lg:text-6xl font-extrabold tracking-tight text-foreground mb-6">
-              Elevate Your Maintenance Business with <span className="text-primary">Luxe Maintainance CRM</span>
+              Elevate Your Maintenance Business with <span className="text-primary">{siteConfig.name}</span>
             </h1>
             <p className="text-lg md:text-xl text-muted-foreground mb-10">
-              Luxe Maintainance CRM is the all-in-one CRM designed for LUXE Maintenance Corporation. Automate workflows, enhance client communication, and drive growth with intelligent tools.
+              {siteConfig.name} is the all-in-one CRM designed for LUXE Maintenance Corporation. Automate workflows, enhance client communication, and drive growth with intelligent tools.
             </p>
             <div className="space-x-4">
               <Button size="lg" asChild className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg">
@@ -102,7 +103,7 @@ export default function HomePage() {
           <div className="mt-16 relative max-w-4xl mx-auto">
             <Image
               src="https://placehold.co/1200x600.png"
-              alt="Luxe Maintainance CRM Dashboard Mockup"
+              alt={`${siteConfig.name} Dashboard Mockup`}
               width={1200}
               height={600}
               className="rounded-xl shadow-2xl object-cover"
@@ -151,7 +152,7 @@ export default function HomePage() {
         <section id="features" className="py-20 bg-background">
           <div className="container mx-auto px-4 md:px-6">
             <div className="text-center mb-16">
-              <h2 className="text-3xl md:text-4xl font-bold text-foreground">Why Choose Luxe Maintainance CRM?</h2>
+              <h2 className="text-3xl md:text-4xl font-bold text-foreground">Why Choose {siteConfig.name}?</h2>
               <p className="text-lg text-muted-foreground mt-2">
                 Powerful features to streamline your operations and delight your customers.
               </p>
@@ -181,7 +182,7 @@ export default function HomePage() {
               Ready to Transform Your Business?
             </h2>
             <p className="text-lg text-muted-foreground mb-8 max-w-2xl mx-auto">
-              Join LUXE Maintenance Corporation in leveraging the power of Luxe Maintainance CRM to achieve new heights of efficiency and customer satisfaction.
+              Join LUXE Maintenance Corporation in leveraging the power of {siteConfig.name} to achieve new heights of efficiency and customer satisfaction.
             </p>
             <Button size="lg" asChild className="bg-accent hover:bg-accent/90 text-accent-foreground shadow-lg">
               <Link href="/login">Access Your Account</Link>
@@ -193,11 +194,9 @@ export default function HomePage() {
       {/* Footer */}
       <footer className="border-t bg-background">
         <div className="container mx-auto py-8 px-4 md:px-6 text-center text-muted-foreground">
-          <p>&copy; {new Date().getFullYear()} Luxe Maintainance CRM by LUXE Maintenance Corporation. All rights reserved.</p>
+          <p>&copy; {new Date().getFullYear()} {siteConfig.name} by LUXE Maintenance Corporation. All rights reserved.</p>
         </div>
       </footer>
     </div>
   );
 }
-
-    
