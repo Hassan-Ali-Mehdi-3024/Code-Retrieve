@@ -1,4 +1,6 @@
 
+"use client";
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,9 +8,9 @@ import { Label } from "@/components/ui/label";
 import { CreditCard, DollarSign, Lock, ShieldCheck } from "lucide-react";
 import type { Metadata } from "next";
 
-export const metadata: Metadata = {
-  title: "Secure Payment Demo",
-};
+// export const metadata: Metadata = { // Metadata needs to be handled in layout for client components
+//   title: "Secure Payment Demo",
+// };
 
 export default function ClientPaymentDemoPage() {
   return (
@@ -58,11 +60,11 @@ export default function ClientPaymentDemoPage() {
               <Label htmlFor="cardHolderName">Cardholder Name</Label>
               <Input id="cardHolderName" type="text" placeholder="John M. Doe" className="mt-1"/>
             </div>
-            <Button 
-              type="submit" 
-              className="w-full bg-primary hover:bg-primary/90 text-primary-foreground !mt-8" 
+            <Button
+              type="submit"
+              className="w-full bg-primary hover:bg-primary/90 text-primary-foreground !mt-8"
               onClick={(e) => {
-                e.preventDefault(); 
+                e.preventDefault();
                 alert("Demo Payment Submitted! No actual payment was processed.");
               }}
             >

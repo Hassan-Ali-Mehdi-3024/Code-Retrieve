@@ -1,4 +1,6 @@
 
+"use client";
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -6,11 +8,15 @@ import { CheckCircle, XCircle, FileText, Printer, Download, AlertTriangle, Mail 
 import type { Metadata } from "next";
 
 // For a dynamic page, metadata generation can be more complex if data-dependent
-export async function generateMetadata({ params }: ClientEstimatePageProps): Promise<Metadata> {
-  return {
-    title: `View Estimate #${params.estimateId}`,
-  };
-}
+// Since we are marking this as "use client", generateMetadata needs to be handled differently
+// or moved to a parent layout if dynamic data from this level is needed.
+// For now, we'll remove it or keep it static if not dependent on client-side fetched data.
+// Let's assume for this fix, the metadata can be simplified or handled by the layout.
+// export async function generateMetadata({ params }: ClientEstimatePageProps): Promise<Metadata> {
+//   return {
+//     title: `View Estimate #${params.estimateId}`,
+//   };
+// }
 
 interface ClientEstimatePageProps {
   params: { estimateId: string };
@@ -33,7 +39,7 @@ interface MockEstimate {
   status: EstimateStatus;
   lineItems: LineItem[];
   subtotal: number;
-  taxRate: number; 
+  taxRate: number;
   taxAmount: number;
   totalAmount: number;
   notes?: string | null;
@@ -44,8 +50,6 @@ interface MockEstimate {
 
 // Mock estimate data - replace with actual data fetching in a real application
 const getMockEstimateData = (estimateId: string): MockEstimate | null => {
-  // In a real app, fetch from backend using estimateId.
-  // For demo, return a consistent mock or null if not a specific demo ID.
   if (estimateId.startsWith("EST-DEMO") || estimateId.startsWith("EST-2024")) {
     return {
       estimateNumber: estimateId,
@@ -73,15 +77,8 @@ const getMockEstimateData = (estimateId: string): MockEstimate | null => {
 
 
 export default function ClientEstimatePage({ params }: ClientEstimatePageProps) {
-  // In a real app, you'd fetch estimate data using params.estimateId
-  // const [estimate, setEstimate] = useState<Estimate | null>(null);
-  // const [loading, setLoading] = useState(true);
-  // useEffect(() => { /* fetch logic here */ setLoading(false); }, [params.estimateId]);
-
   const estimate = getMockEstimateData(params.estimateId);
 
-  // if (loading) return <div className="text-center py-10"><p>Loading estimate...</p></div>;
-  
   if (!estimate) {
     return (
       <div className="text-center py-10 max-w-lg mx-auto">
@@ -94,13 +91,13 @@ export default function ClientEstimatePage({ params }: ClientEstimatePageProps) 
             </CardHeader>
             <CardContent>
                 <p className="text-muted-foreground">
-                The estimate ID <code className="bg-muted px-1 py-0.5 rounded-sm">{params.estimateId}</code> could not be found or is no longer available. 
+                The estimate ID <code className="bg-muted px-1 py-0.5 rounded-sm">{params.estimateId}</code> could not be found or is no longer available.
                 Please check the link or contact support.
                 </p>
             </CardContent>
             <CardFooter className="flex justify-center">
                 <Button variant="outline" asChild>
-                    <a href={`mailto:${mockEstimateData?.companyEmail || 'support@luxeflow.com'}`}>
+                    <a href={`mailto:${getMockEstimateData("EST-DEMO")?.companyEmail || 'support@luxeflow.com'}`}> {/* Use a default or fetched company email */}
                         <Mail className="mr-2 h-4 w-4"/> Contact Support
                     </a>
                 </Button>
@@ -109,12 +106,12 @@ export default function ClientEstimatePage({ params }: ClientEstimatePageProps) 
       </div>
     );
   }
-  
+
   const getStatusBadgeVariant = (status: EstimateStatus) => {
     switch (status) {
       case "Draft": case "Expired": return "secondary";
       case "Sent": return "default";
-      case "Accepted": return "outline"; // typically success, but use outline for now
+      case "Accepted": return "outline";
       case "Rejected": return "destructive";
       default: return "default";
     }
@@ -150,7 +147,7 @@ export default function ClientEstimatePage({ params }: ClientEstimatePageProps) 
         </CardHeader>
         <CardContent className="pt-6">
           <div className="space-y-4 text-sm">
-            
+
             <div className="overflow-x-auto">
               <table className="min-w-full">
                 <thead className="border-b">
