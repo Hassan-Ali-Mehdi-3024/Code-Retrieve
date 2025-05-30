@@ -100,18 +100,6 @@ export default function HomePage() {
               </Button>
             </div>
           </div>
-          <div className="mt-16 relative max-w-4xl mx-auto">
-            <Image
-              src="https://placehold.co/1200x600.png"
-              alt={`${siteConfig.name} Dashboard Mockup`}
-              width={1200}
-              height={600}
-              className="rounded-xl shadow-2xl object-cover"
-              data-ai-hint="dashboard interface"
-              priority
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent rounded-xl"></div>
-          </div>
         </section>
         
         {/* Client Tools Section */}
