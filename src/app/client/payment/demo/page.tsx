@@ -1,7 +1,7 @@
 
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, Suspense } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,8 +34,7 @@ interface Invoice {
   paymentDate?: Timestamp | null;
 }
 
-
-export default function ClientPaymentDemoPage() {
+function PaymentDemoContent() {
   const searchParams = useSearchParams();
   const [invoice, setInvoice] = useState<Invoice | null>(null);
   const [loading, setLoading] = useState(false);
@@ -191,3 +190,10 @@ export default function ClientPaymentDemoPage() {
   );
 }
 
+export default function ClientPaymentDemoPage() {
+  return (
+    <Suspense fallback={<div className="flex h-[60vh] items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="ml-2">Loading payment page...</p></div>}>
+      <PaymentDemoContent />
+    </Suspense>
+  );
+}
