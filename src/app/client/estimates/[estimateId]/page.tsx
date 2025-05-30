@@ -1,41 +1,37 @@
 
 "use client";
 
+import React, { useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { CheckCircle, XCircle, FileText, Printer, Download, AlertTriangle, Mail } from "lucide-react";
-import type { Metadata } from "next";
-
-// For a dynamic page, metadata generation can be more complex if data-dependent
-// Since we are marking this as "use client", generateMetadata needs to be handled differently
-// or moved to a parent layout if dynamic data from this level is needed.
-// For now, we'll remove it or keep it static if not dependent on client-side fetched data.
-// Let's assume for this fix, the metadata can be simplified or handled by the layout.
-// export async function generateMetadata({ params }: ClientEstimatePageProps): Promise<Metadata> {
-//   return {
-//     title: `View Estimate #${params.estimateId}`,
-//   };
-// }
+import { CheckCircle, XCircle, FileText, Printer, Download, AlertTriangle, Mail, Loader2 } from "lucide-react";
+import { db } from "@/lib/firebase/config";
+import { doc, getDoc, Timestamp } from "firebase/firestore";
+import { format } from "date-fns";
 
 interface ClientEstimatePageProps {
   params: { estimateId: string };
 }
 
-type EstimateStatus = "Sent" | "Accepted" | "Rejected" | "Draft" | "Expired";
+type EstimateStatus = "Draft" | "Sent" | "Accepted" | "Rejected" | "Expired";
 
 interface LineItem {
+  id: string;
   description: string;
   quantity: number;
   unitPrice: number;
   totalPrice: number;
 }
 
-interface MockEstimate {
+interface Estimate {
+  id: string;
   estimateNumber: string;
+  customerId: string;
   customerName: string;
-  dateCreated: string;
-  validUntil: string;
+  customerEmail?: string;
+  dateCreated: Timestamp;
+  validUntil: Timestamp;
   status: EstimateStatus;
   lineItems: LineItem[];
   subtotal: number;
@@ -43,71 +39,52 @@ interface MockEstimate {
   taxAmount: number;
   totalAmount: number;
   notes?: string | null;
-  companyAddress: string;
-  companyPhone: string;
-  companyEmail: string;
+  jobCreated?: boolean;
 }
 
-// Mock estimate data - replace with actual data fetching in a real application
-const getMockEstimateData = (estimateId: string): MockEstimate | null => {
-  if (estimateId.startsWith("EST-DEMO") || estimateId.startsWith("EST-2024")) {
-    return {
-      estimateNumber: estimateId,
-      customerName: "Valued Client",
-      dateCreated: "July 28, 2024",
-      validUntil: "August 27, 2024",
-      status: "Sent",
-      lineItems: [
-        { description: "Premium Landscaping Package - Phase 1", quantity: 1, unitPrice: 450.00, totalPrice: 450.00 },
-        { description: "Seasonal Flower Bed Planting (Assorted Perennials)", quantity: 2, unitPrice: 75.00, totalPrice: 150.00 },
-        { description: "Irrigation System Check & Minor Adjustments", quantity: 1, unitPrice: 120.00, totalPrice: 120.00 },
-      ],
-      subtotal: 720.00,
-      taxRate: 0.08, // 8%
-      taxAmount: 57.60,
-      totalAmount: 777.60,
-      notes: "This estimate includes all specified materials and labor. Payment terms: 50% upfront, 50% upon completion. This estimate is valid for 30 days from the date of issue. Thank you for choosing LuxeFlow!",
-      companyAddress: "123 Luxe Lane, Prestige City, ST 12345",
-      companyPhone: "(555) 123-4567",
-      companyEmail: "quotes@luxeflow.com"
-    };
-  }
-  return null;
+// Static company details for display on the estimate
+const companyDetails = {
+  name: "LuxeFlow by LUXE Maintenance Corporation",
+  address: "123 Luxe Lane, Prestige City, ST 12345",
+  phone: "(555) 123-4567",
+  email: "quotes@luxeflow.com",
 };
 
-
 export default function ClientEstimatePage({ params }: ClientEstimatePageProps) {
-  const estimate = getMockEstimateData(params.estimateId);
+  const [estimate, setEstimate] = useState<Estimate | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  if (!estimate) {
-    return (
-      <div className="text-center py-10 max-w-lg mx-auto">
-        <Card className="border-destructive">
-            <CardHeader>
-                <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-destructive/10 mb-4">
-                    <AlertTriangle className="h-6 w-6 text-destructive" />
-                </div>
-                <CardTitle className="text-xl text-destructive">Estimate Not Found</CardTitle>
-            </CardHeader>
-            <CardContent>
-                <p className="text-muted-foreground">
-                The estimate ID <code className="bg-muted px-1 py-0.5 rounded-sm">{params.estimateId}</code> could not be found or is no longer available.
-                Please check the link or contact support.
-                </p>
-            </CardContent>
-            <CardFooter className="flex justify-center">
-                <Button variant="outline" asChild>
-                    <a href={`mailto:${getMockEstimateData("EST-DEMO")?.companyEmail || 'support@luxeflow.com'}`}> {/* Use a default or fetched company email */}
-                        <Mail className="mr-2 h-4 w-4"/> Contact Support
-                    </a>
-                </Button>
-            </CardFooter>
-        </Card>
-      </div>
-    );
-  }
+  useEffect(() => {
+    const fetchEstimate = async () => {
+      if (!params.estimateId) {
+        setError("No estimate ID provided.");
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
+      try {
+        const estimateDocRef = doc(db, "estimates", params.estimateId);
+        const docSnap = await getDoc(estimateDocRef);
 
-  const getStatusBadgeVariant = (status: EstimateStatus) => {
+        if (docSnap.exists()) {
+          setEstimate({ id: docSnap.id, ...docSnap.data() } as Estimate);
+        } else {
+          setError("Estimate not found or you do not have permission to view it.");
+        }
+      } catch (err) {
+        console.error("Error fetching estimate:", err);
+        setError("Failed to load estimate details. Please try again later.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchEstimate();
+  }, [params.estimateId]);
+
+  const getStatusBadgeVariant = (status: EstimateStatus | undefined) => {
+    if (!status) return "default";
     switch (status) {
       case "Draft": case "Expired": return "secondary";
       case "Sent": return "default";
@@ -117,15 +94,54 @@ export default function ClientEstimatePage({ params }: ClientEstimatePageProps) 
     }
   };
 
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center py-10 max-w-lg mx-auto">
+        <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
+        <p className="text-lg font-medium text-muted-foreground">Loading estimate details...</p>
+      </div>
+    );
+  }
+
+  if (error || !estimate) {
+    return (
+      <div className="text-center py-10 max-w-lg mx-auto">
+        <Card className="border-destructive shadow-lg">
+            <CardHeader>
+                <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-destructive/10 mb-4">
+                    <AlertTriangle className="h-8 w-8 text-destructive" />
+                </div>
+                <CardTitle className="text-2xl text-destructive">Access Denied or Not Found</CardTitle>
+            </CardHeader>
+            <CardContent>
+                <p className="text-muted-foreground">
+                  {error || `The estimate ID "${params.estimateId}" could not be found or is no longer available.`}
+                </p>
+                <p className="text-muted-foreground mt-2">
+                  Please check the link or contact support if you believe this is an error.
+                </p>
+            </CardContent>
+            <CardFooter className="flex justify-center pt-4">
+                <Button variant="outline" asChild>
+                    <a href={`mailto:${companyDetails.email}`}>
+                        <Mail className="mr-2 h-4 w-4"/> Contact Support
+                    </a>
+                </Button>
+            </CardFooter>
+        </Card>
+      </div>
+    );
+  }
 
   return (
-    <div className="max-w-4xl mx-auto py-8">
-      <Card className="shadow-xl border">
-        <CardHeader className="border-b pb-6 bg-muted/30">
+    <div className="max-w-4xl mx-auto py-8 px-2 sm:px-4">
+      <Card className="shadow-xl border print:shadow-none print:border-none">
+        <CardHeader className="border-b pb-6 bg-muted/30 print:bg-transparent">
           <div className="flex flex-col sm:flex-row justify-between items-start gap-4">
             <div>
-              <h1 className="text-sm font-semibold text-primary">{estimate.companyAddress}</h1>
-              <p className="text-xs text-muted-foreground">{estimate.companyPhone} • {estimate.companyEmail}</p>
+              <h1 className="text-lg font-semibold text-primary">{companyDetails.name}</h1>
+              <p className="text-xs text-muted-foreground">{companyDetails.address}</p>
+              <p className="text-xs text-muted-foreground">{companyDetails.phone} • {companyDetails.email}</p>
             </div>
             <div className="text-left sm:text-right mt-2 sm:mt-0">
                 <h2 className="text-2xl font-bold text-primary tracking-tight">ESTIMATE</h2>
@@ -136,18 +152,17 @@ export default function ClientEstimatePage({ params }: ClientEstimatePageProps) 
             <div>
                 <p className="text-xs text-muted-foreground">BILLED TO</p>
                 <p className="font-semibold">{estimate.customerName}</p>
-                {/* Add customer address if available */}
+                {estimate.customerEmail && <p className="text-xs text-muted-foreground">{estimate.customerEmail}</p>}
             </div>
             <div className="text-left sm:text-right mt-2 sm:mt-0">
-                <p className="text-xs text-muted-foreground">Date of Issue: <span className="font-medium text-foreground">{estimate.dateCreated}</span></p>
-                <p className="text-xs text-muted-foreground">Valid Until: <span className="font-medium text-foreground">{estimate.validUntil}</span></p>
+                <p className="text-xs text-muted-foreground">Date of Issue: <span className="font-medium text-foreground">{format(estimate.dateCreated.toDate(), "PPP")}</span></p>
+                <p className="text-xs text-muted-foreground">Valid Until: <span className="font-medium text-foreground">{format(estimate.validUntil.toDate(), "PPP")}</span></p>
                 <Badge variant={getStatusBadgeVariant(estimate.status)} className="mt-1 text-xs">{estimate.status}</Badge>
             </div>
           </div>
         </CardHeader>
         <CardContent className="pt-6">
           <div className="space-y-4 text-sm">
-
             <div className="overflow-x-auto">
               <table className="min-w-full">
                 <thead className="border-b">
@@ -159,12 +174,12 @@ export default function ClientEstimatePage({ params }: ClientEstimatePageProps) 
                   </tr>
                 </thead>
                 <tbody>
-                  {estimate.lineItems.map((item, index) => (
-                    <tr key={index} className={`${index < estimate.lineItems.length - 1 ? 'border-b' : ''}`}>
+                  {estimate.lineItems.map((item) => (
+                    <tr key={item.id} className="border-b last:border-b-0">
                       <td className="py-3 px-3 text-left">{item.description}</td>
                       <td className="py-3 px-3 text-center">{item.quantity}</td>
-                      <td className="py-3 px-3 text-right">${item.unitPrice.toFixed(2)}</td>
-                      <td className="py-3 px-3 text-right font-medium">${item.totalPrice.toFixed(2)}</td>
+                      <td className="py-3 px-3 text-right">${Number(item.unitPrice).toFixed(2)}</td>
+                      <td className="py-3 px-3 text-right font-medium">${Number(item.totalPrice).toFixed(2)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -178,7 +193,7 @@ export default function ClientEstimatePage({ params }: ClientEstimatePageProps) 
                         <span className="font-medium">${estimate.subtotal.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between">
-                        <span className="text-muted-foreground">Tax ({(estimate.taxRate * 100).toFixed(0)}%):</span>
+                        <span className="text-muted-foreground">Tax ({(estimate.taxRate * 100).toFixed(1)}%):</span>
                         <span className="font-medium">${estimate.taxAmount.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-lg font-bold border-t pt-1 mt-1">
@@ -195,19 +210,19 @@ export default function ClientEstimatePage({ params }: ClientEstimatePageProps) 
               </div>
             )}
 
-            <div className="mt-8 pt-6 border-t flex flex-col sm:flex-row justify-end items-center space-y-3 sm:space-y-0 sm:space-x-3">
+            <div className="mt-8 pt-6 border-t flex flex-col sm:flex-row justify-end items-center space-y-3 sm:space-y-0 sm:space-x-3 print:hidden">
               <Button variant="outline" size="sm" onClick={() => window.print()}>
                 <Printer className="mr-2 h-4 w-4" /> Print
               </Button>
-              <Button variant="outline" size="sm" onClick={() => alert("Downloading PDF... (Demo)")}>
+              <Button variant="outline" size="sm" onClick={() => alert("Downloading PDF... (Functionality to be implemented)")}>
                 <Download className="mr-2 h-4 w-4" /> Download PDF
               </Button>
               {estimate.status === "Sent" && (
                  <>
-                    <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={() => alert("Estimate Accepted! (Demo Action)")}>
+                    <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={() => alert("Estimate Accepted! (Backend action required)")}>
                         <CheckCircle className="mr-2 h-4 w-4" /> Accept Estimate
                     </Button>
-                    <Button size="sm" variant="destructive" onClick={() => alert("Estimate Rejected. (Demo Action)")}>
+                    <Button size="sm" variant="destructive" onClick={() => alert("Estimate Rejected. (Backend action required)")}>
                         <XCircle className="mr-2 h-4 w-4" /> Reject Estimate
                     </Button>
                  </>
@@ -215,9 +230,9 @@ export default function ClientEstimatePage({ params }: ClientEstimatePageProps) 
             </div>
           </div>
         </CardContent>
-        <CardFooter className="border-t pt-6">
+        <CardFooter className="border-t pt-6 print:hidden">
              <p className="text-xs text-center text-muted-foreground w-full">
-                Questions about this estimate? Contact us at <a href={`mailto:${estimate.companyEmail}`} className="text-primary hover:underline">{estimate.companyEmail}</a> or call <a href={`tel:${estimate.companyPhone}`} className="text-primary hover:underline">{estimate.companyPhone}</a>.
+                Questions about this estimate? Contact us at <a href={`mailto:${companyDetails.email}`} className="text-primary hover:underline">{companyDetails.email}</a> or call <a href={`tel:${companyDetails.phone}`} className="text-primary hover:underline">{companyDetails.phone}</a>.
             </p>
         </CardFooter>
       </Card>
