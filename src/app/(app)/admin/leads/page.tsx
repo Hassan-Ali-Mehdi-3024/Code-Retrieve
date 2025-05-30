@@ -3,14 +3,14 @@
 
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react"; // Added useMemo
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Building, PlusCircle, Edit, Eye, Mail, Phone, User, Briefcase as LeadSourceIcon, Loader2, BrainCircuit, Star, UserCheck, RefreshCw } from "lucide-react";
+import { Building, PlusCircle, Edit, Eye, Mail, Phone, User, Briefcase as LeadSourceIcon, Loader2, BrainCircuit, Star, UserCheck, RefreshCw, Search as SearchIcon } from "lucide-react"; // Added SearchIcon
 import Image from "next/image";
 import {
   Dialog,
@@ -37,9 +37,8 @@ import { db } from "@/lib/firebase/config";
 import { collection, addDoc, getDocs, Timestamp, query, orderBy, doc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { format } from "date-fns";
 import { scoreLead, type ScoreLeadInput, type ScoreLeadOutput } from "@/ai/flows/lead-scoring";
-import type { Customer } from "../customers/page"; // Assuming Customer type might be useful
+import type { Customer } from "../customers/page"; 
 
-// Define Lead Status type
 type LeadStatus = "New" | "Contacted" | "Qualified" | "Lost" | "Converted";
 
 interface Lead {
@@ -55,7 +54,6 @@ interface Lead {
   logoUrl?: string; 
   dataAiHint?: string;
   notes?: string | null;
-  // AI Scoring fields
   leadScore?: number;
   leadScoreReason?: string;
   isQualified?: boolean;
@@ -73,18 +71,12 @@ const leadSchema = z.object({
 
 const getStatusBadgeVariant = (status: LeadStatus) => {
   switch (status) {
-    case "New":
-      return "default";
-    case "Contacted":
-      return "secondary";
-    case "Qualified":
-      return "outline"; 
-    case "Converted":
-      return "default"; 
-    case "Lost":
-      return "destructive";
-    default:
-      return "default";
+    case "New": return "default";
+    case "Contacted": return "secondary";
+    case "Qualified": return "outline"; 
+    case "Converted": return "default"; 
+    case "Lost": return "destructive";
+    default: return "default";
   }
 };
 
@@ -102,6 +94,7 @@ export default function AdminLeadsPage() {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [isScoringLead, setIsScoringLead] = useState(false);
   const [isConvertingToCustomer, setIsConvertingToCustomer] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
 
   useEffect(() => {
     if (!authLoading && userProfile?.role !== "admin") {
@@ -173,7 +166,7 @@ export default function AdminLeadsPage() {
       };
       
       const leadsCollectionRef = collection(db, "leads");
-      await addDoc(leadsCollectionRef, newLeadData);
+      const docRef = await addDoc(leadsCollectionRef, newLeadData);
       
       toast({
         title: "Lead Added",
@@ -181,7 +174,9 @@ export default function AdminLeadsPage() {
       });
       form.reset();
       setIsAddLeadDialogOpen(false);
-      fetchLeads(); 
+      // Optimistically add to local state or refetch
+       setLeads(prev => [{...newLeadData, id: docRef.id, dateAdded: Timestamp.now(), lastUpdated: Timestamp.now()} as Lead, ...prev]);
+      // fetchLeads(); // Or refetch for full consistency
     } catch (error) {
       console.error("Error adding lead: ", error);
       toast({
@@ -210,20 +205,23 @@ export default function AdminLeadsPage() {
     if (!selectedLead) return;
     try {
       const leadDocRef = doc(db, "leads", selectedLead.id);
-      await updateDoc(leadDocRef, {
+      const updatedData = {
         ...values,
         status: values.status as LeadStatus,
         phone: values.phone || null,
         notes: values.notes || null,
         lastUpdated: serverTimestamp(),
-      });
+      }
+      await updateDoc(leadDocRef, updatedData);
       toast({
         title: "Lead Updated",
         description: `${values.companyName} has been successfully updated.`,
       });
       setIsEditLeadDialogOpen(false);
       setSelectedLead(null);
-      fetchLeads(); 
+      // Optimistically update local state or refetch
+      setLeads(prev => prev.map(l => l.id === selectedLead.id ? {...l, ...updatedData, lastUpdated: Timestamp.now()} as Lead : l));
+      // fetchLeads();
     } catch (error) {
       console.error("Error updating lead: ", error);
       toast({
@@ -252,20 +250,19 @@ export default function AdminLeadsPage() {
       const scoreOutput: ScoreLeadOutput = await scoreLead(scoreLeadInput);
       
       const leadDocRef = doc(db, "leads", currentLead.id);
-      await updateDoc(leadDocRef, {
+      const aiUpdate = {
         leadScore: scoreOutput.leadScore,
         leadScoreReason: scoreOutput.reason,
         isQualified: scoreOutput.isQualified,
         lastUpdated: serverTimestamp(),
-      });
+      }
+      await updateDoc(leadDocRef, aiUpdate);
 
       const updatedLeadWithScore = {
         ...currentLead, 
-        leadScore: scoreOutput.leadScore,
-        leadScoreReason: scoreOutput.reason,
-        isQualified: scoreOutput.isQualified,
+        ...aiUpdate,
         lastUpdated: Timestamp.now() 
-      };
+      } as Lead;
       setSelectedLead(updatedLeadWithScore); 
       setLeads(prevLeads => prevLeads.map(l => l.id === currentLead.id ? updatedLeadWithScore : l));
       
@@ -318,7 +315,8 @@ export default function AdminLeadsPage() {
       });
 
       setIsViewLeadDialogOpen(false); 
-      fetchLeads(); 
+      setLeads(prev => prev.map(l => l.id === selectedLead.id ? {...l, status: "Converted", lastUpdated: Timestamp.now()} as Lead : l));
+      // fetchLeads(); 
 
     } catch (error) {
       console.error("Error converting lead to customer: ", error);
@@ -331,6 +329,17 @@ export default function AdminLeadsPage() {
       setIsConvertingToCustomer(false);
     }
   };
+
+  const filteredLeads = useMemo(() => {
+    if (!searchTerm) return leads;
+    return leads.filter(lead =>
+      lead.companyName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      lead.contactName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      lead.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (lead.phone && lead.phone.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      lead.source.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [leads, searchTerm]);
 
 
   if (authLoading || (!userProfile && !isLoadingLeads)) { 
@@ -355,30 +364,26 @@ export default function AdminLeadsPage() {
     <div className="space-y-6">
       {/* Add Lead Dialog */}
       <Dialog open={isAddLeadDialogOpen} onOpenChange={setIsAddLeadDialogOpen}>
-        <DialogTrigger asChild>
-          <Button onClick={() => { form.reset({ companyName: "", contactName: "", email: "", phone: "", status: "New", source: "", notes: "" }); setIsAddLeadDialogOpen(true);}}>
-            <PlusCircle className="mr-2 h-4 w-4" /> Add New Lead
-          </Button>
-        </DialogTrigger>
-        <DialogContent className="sm:max-w-[520px]">
+        {/* DialogTrigger is part of the header now */}
+        <DialogContent className="sm:max-w-lg rounded-lg">
           <DialogHeader>
-            <DialogTitle>Add New Lead</DialogTitle>
+            <DialogTitle className="text-xl">Add New Lead</DialogTitle>
             <DialogDescription>
               Enter the details for the new lead. Click save when you're done.
             </DialogDescription>
           </DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onAddLeadSubmit)} className="space-y-4 py-2 max-h-[70vh] overflow-y-auto pr-2">
-              <FormField control={form.control} name="companyName" render={({ field }) => ( <FormItem> <FormLabel>Company Name</FormLabel> <FormControl><div className="relative"><Building className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. Acme Corp" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
-              <FormField control={form.control} name="contactName" render={({ field }) => ( <FormItem> <FormLabel>Contact Name</FormLabel> <FormControl><div className="relative"><User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. John Doe" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
-              <FormField control={form.control} name="email" render={({ field }) => ( <FormItem> <FormLabel>Email</FormLabel> <FormControl><div className="relative"><Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input type="email" placeholder="e.g. john.doe@example.com" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
-              <FormField control={form.control} name="phone" render={({ field }) => ( <FormItem> <FormLabel>Phone (Optional)</FormLabel> <FormControl><div className="relative"><Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input type="tel" placeholder="e.g. 555-123-4567" {...field} value={field.value ?? ""} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
-              <FormField control={form.control} name="status" render={({ field }) => ( <FormItem> <FormLabel>Status</FormLabel> <Select onValueChange={field.onChange} defaultValue={field.value}> <FormControl><SelectTrigger><SelectValue placeholder="Select lead status" /></SelectTrigger></FormControl> <SelectContent> <SelectItem value="New">New</SelectItem> <SelectItem value="Contacted">Contacted</SelectItem> <SelectItem value="Qualified">Qualified</SelectItem> <SelectItem value="Lost">Lost</SelectItem> <SelectItem value="Converted">Converted</SelectItem></SelectContent> </Select> <FormMessage /> </FormItem> )} />
-              <FormField control={form.control} name="source" render={({ field }) => ( <FormItem> <FormLabel>Source</FormLabel> <FormControl><div className="relative"><LeadSourceIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. Website, Referral" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
-              <FormField control={form.control} name="notes" render={({ field }) => ( <FormItem> <FormLabel>Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Any additional notes about this lead..." {...field} value={field.value ?? ""} /></FormControl> <FormMessage /> </FormItem> )} />
+              <FormField control={form.control} name="companyName" render={({ field }) => ( <FormItem> <FormLabel>Company Name</FormLabel> <FormControl><div className="relative"><Building className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. Acme Corp" {...field} className="pl-10 rounded-md" /></div></FormControl> <FormMessage /> </FormItem> )} />
+              <FormField control={form.control} name="contactName" render={({ field }) => ( <FormItem> <FormLabel>Contact Name</FormLabel> <FormControl><div className="relative"><User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. John Doe" {...field} className="pl-10 rounded-md" /></div></FormControl> <FormMessage /> </FormItem> )} />
+              <FormField control={form.control} name="email" render={({ field }) => ( <FormItem> <FormLabel>Email</FormLabel> <FormControl><div className="relative"><Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input type="email" placeholder="e.g. john.doe@example.com" {...field} className="pl-10 rounded-md" /></div></FormControl> <FormMessage /> </FormItem> )} />
+              <FormField control={form.control} name="phone" render={({ field }) => ( <FormItem> <FormLabel>Phone (Optional)</FormLabel> <FormControl><div className="relative"><Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input type="tel" placeholder="e.g. 555-123-4567" {...field} value={field.value ?? ""} className="pl-10 rounded-md" /></div></FormControl> <FormMessage /> </FormItem> )} />
+              <FormField control={form.control} name="status" render={({ field }) => ( <FormItem> <FormLabel>Status</FormLabel> <Select onValueChange={field.onChange} defaultValue={field.value}> <FormControl><SelectTrigger className="rounded-md"><SelectValue placeholder="Select lead status" /></SelectTrigger></FormControl> <SelectContent> <SelectItem value="New">New</SelectItem> <SelectItem value="Contacted">Contacted</SelectItem> <SelectItem value="Qualified">Qualified</SelectItem> <SelectItem value="Lost">Lost</SelectItem> <SelectItem value="Converted">Converted</SelectItem> </SelectContent> </Select> <FormMessage /> </FormItem> )} />
+              <FormField control={form.control} name="source" render={({ field }) => ( <FormItem> <FormLabel>Source</FormLabel> <FormControl><div className="relative"><LeadSourceIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. Website, Referral" {...field} className="pl-10 rounded-md" /></div></FormControl> <FormMessage /> </FormItem> )} />
+              <FormField control={form.control} name="notes" render={({ field }) => ( <FormItem> <FormLabel>Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Any additional notes about this lead..." {...field} value={field.value ?? ""} className="rounded-md" /></FormControl> <FormMessage /> </FormItem> )} />
               <DialogFooter className="pt-4">
-                <Button type="button" variant="outline" onClick={() => { setIsAddLeadDialogOpen(false); form.reset();}}>Cancel</Button>
-                <Button type="submit" disabled={form.formState.isSubmitting}>{form.formState.isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : "Save Lead"}</Button>
+                <Button type="button" variant="outline" onClick={() => { setIsAddLeadDialogOpen(false); form.reset();}} className="rounded-md">Cancel</Button>
+                <Button type="submit" disabled={form.formState.isSubmitting} className="rounded-md">{form.formState.isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving...</> : "Save Lead"}</Button>
               </DialogFooter>
             </form>
           </Form>
@@ -387,23 +392,23 @@ export default function AdminLeadsPage() {
 
       {/* Edit Lead Dialog */}
       <Dialog open={isEditLeadDialogOpen} onOpenChange={setIsEditLeadDialogOpen}>
-        <DialogContent className="sm:max-w-[520px]">
+        <DialogContent className="sm:max-w-lg rounded-lg">
           <DialogHeader>
-            <DialogTitle>Edit Lead: {selectedLead?.companyName}</DialogTitle>
+            <DialogTitle className="text-xl">Edit Lead: {selectedLead?.companyName}</DialogTitle>
             <DialogDescription>Update the details for this lead. Click save when you're done.</DialogDescription>
           </DialogHeader>
           <Form {...editForm}>
             <form onSubmit={editForm.handleSubmit(onEditLeadSubmit)} className="space-y-4 py-2 max-h-[70vh] overflow-y-auto pr-2">
-               <FormField control={editForm.control} name="companyName" render={({ field }) => ( <FormItem> <FormLabel>Company Name</FormLabel> <FormControl><div className="relative"><Building className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. Acme Corp" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
-               <FormField control={editForm.control} name="contactName" render={({ field }) => ( <FormItem> <FormLabel>Contact Name</FormLabel> <FormControl><div className="relative"><User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. John Doe" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
-               <FormField control={editForm.control} name="email" render={({ field }) => ( <FormItem> <FormLabel>Email</FormLabel> <FormControl><div className="relative"><Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input type="email" placeholder="e.g. john.doe@example.com" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
-               <FormField control={editForm.control} name="phone" render={({ field }) => ( <FormItem> <FormLabel>Phone (Optional)</FormLabel> <FormControl><div className="relative"><Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input type="tel" placeholder="e.g. 555-123-4567" {...field} value={field.value ?? ""} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
-               <FormField control={editForm.control} name="status" render={({ field }) => ( <FormItem> <FormLabel>Status</FormLabel> <Select onValueChange={field.onChange} defaultValue={field.value}> <FormControl><SelectTrigger><SelectValue placeholder="Select lead status" /></SelectTrigger></FormControl> <SelectContent> <SelectItem value="New">New</SelectItem> <SelectItem value="Contacted">Contacted</SelectItem> <SelectItem value="Qualified">Qualified</SelectItem> <SelectItem value="Lost">Lost</SelectItem> <SelectItem value="Converted">Converted</SelectItem> </SelectContent> </Select> <FormMessage /> </FormItem> )} />
-               <FormField control={editForm.control} name="source" render={({ field }) => ( <FormItem> <FormLabel>Source</FormLabel> <FormControl><div className="relative"><LeadSourceIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. Website, Referral" {...field} className="pl-10" /></div></FormControl> <FormMessage /> </FormItem> )} />
-               <FormField control={editForm.control} name="notes" render={({ field }) => ( <FormItem> <FormLabel>Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Any additional notes about this lead..." {...field} value={field.value ?? ""} /></FormControl> <FormMessage /> </FormItem> )} />
+               <FormField control={editForm.control} name="companyName" render={({ field }) => ( <FormItem> <FormLabel>Company Name</FormLabel> <FormControl><div className="relative"><Building className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. Acme Corp" {...field} className="pl-10 rounded-md" /></div></FormControl> <FormMessage /> </FormItem> )} />
+               <FormField control={editForm.control} name="contactName" render={({ field }) => ( <FormItem> <FormLabel>Contact Name</FormLabel> <FormControl><div className="relative"><User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. John Doe" {...field} className="pl-10 rounded-md" /></div></FormControl> <FormMessage /> </FormItem> )} />
+               <FormField control={editForm.control} name="email" render={({ field }) => ( <FormItem> <FormLabel>Email</FormLabel> <FormControl><div className="relative"><Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input type="email" placeholder="e.g. john.doe@example.com" {...field} className="pl-10 rounded-md" /></div></FormControl> <FormMessage /> </FormItem> )} />
+               <FormField control={editForm.control} name="phone" render={({ field }) => ( <FormItem> <FormLabel>Phone (Optional)</FormLabel> <FormControl><div className="relative"><Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input type="tel" placeholder="e.g. 555-123-4567" {...field} value={field.value ?? ""} className="pl-10 rounded-md" /></div></FormControl> <FormMessage /> </FormItem> )} />
+               <FormField control={editForm.control} name="status" render={({ field }) => ( <FormItem> <FormLabel>Status</FormLabel> <Select onValueChange={field.onChange} defaultValue={field.value}> <FormControl><SelectTrigger className="rounded-md"><SelectValue placeholder="Select lead status" /></SelectTrigger></FormControl> <SelectContent> <SelectItem value="New">New</SelectItem> <SelectItem value="Contacted">Contacted</SelectItem> <SelectItem value="Qualified">Qualified</SelectItem> <SelectItem value="Lost">Lost</SelectItem> <SelectItem value="Converted">Converted</SelectItem> </SelectContent> </Select> <FormMessage /> </FormItem> )} />
+               <FormField control={editForm.control} name="source" render={({ field }) => ( <FormItem> <FormLabel>Source</FormLabel> <FormControl><div className="relative"><LeadSourceIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="e.g. Website, Referral" {...field} className="pl-10 rounded-md" /></div></FormControl> <FormMessage /> </FormItem> )} />
+               <FormField control={editForm.control} name="notes" render={({ field }) => ( <FormItem> <FormLabel>Notes (Optional)</FormLabel> <FormControl><Textarea placeholder="Any additional notes about this lead..." {...field} value={field.value ?? ""} className="rounded-md" /></FormControl> <FormMessage /> </FormItem> )} />
               <DialogFooter className="pt-4">
-                <Button type="button" variant="outline" onClick={() => { setIsEditLeadDialogOpen(false); setSelectedLead(null); }}>Cancel</Button>
-                <Button type="submit" disabled={editForm.formState.isSubmitting}>{editForm.formState.isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving Changes...</> : "Save Changes"}</Button>
+                <Button type="button" variant="outline" onClick={() => { setIsEditLeadDialogOpen(false); setSelectedLead(null); }} className="rounded-md">Cancel</Button>
+                <Button type="submit" disabled={editForm.formState.isSubmitting} className="rounded-md">{editForm.formState.isSubmitting ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving Changes...</> : "Save Changes"}</Button>
               </DialogFooter>
             </form>
           </Form>
@@ -412,9 +417,9 @@ export default function AdminLeadsPage() {
 
       {/* View Lead Dialog */}
       <Dialog open={isViewLeadDialogOpen} onOpenChange={setIsViewLeadDialogOpen}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-lg rounded-lg">
           <DialogHeader>
-            <DialogTitle className="flex items-center">
+            <DialogTitle className="flex items-center text-xl">
               <Image 
                 src={selectedLead?.logoUrl || `https://placehold.co/40x40.png?text=${selectedLead?.companyName?.substring(0,2)?.toUpperCase() || 'L'}`} 
                 alt={selectedLead?.companyName || "Lead"} 
@@ -441,11 +446,11 @@ export default function AdminLeadsPage() {
               {selectedLead.notes && (
                 <div>
                   <h4 className="font-semibold text-muted-foreground mb-1">Notes:</h4>
-                  <p className="text-sm bg-muted/50 p-3 rounded-md whitespace-pre-wrap">{selectedLead.notes}</p>
+                  <p className="text-sm bg-muted/30 p-3 rounded-md whitespace-pre-wrap">{selectedLead.notes}</p>
                 </div>
               )}
 
-              <Card className="mt-4 bg-card shadow-md">
+              <Card className="mt-4 bg-card shadow-md rounded-lg">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-lg flex items-center">
                     <BrainCircuit className="mr-2 h-5 w-5 text-primary" /> AI Lead Insights
@@ -458,16 +463,16 @@ export default function AdminLeadsPage() {
                         <Star className="h-5 w-5 text-yellow-500 mr-2" />
                         <p className="text-xl font-bold text-primary">{selectedLead.leadScore} <span className="text-sm font-normal text-muted-foreground">/ 100</span></p>
                       </div>
-                      <p><strong className="text-muted-foreground">Qualification:</strong> {selectedLead.isQualified ? <Badge variant="outline">Qualified</Badge> : <Badge variant="destructive">Not Qualified</Badge>}</p>
+                      <p><strong className="text-muted-foreground">Qualification:</strong> {selectedLead.isQualified ? <Badge variant="outline" className="border-green-500 text-green-600">Qualified</Badge> : <Badge variant="destructive">Not Qualified</Badge>}</p>
                       <p><strong className="text-muted-foreground">Reason:</strong> {selectedLead.leadScoreReason}</p>
-                      <Button variant="outline" size="sm" onClick={() => handleScoreLead()} disabled={isScoringLead} className="mt-2">
+                      <Button variant="outline" size="sm" onClick={() => handleScoreLead()} disabled={isScoringLead} className="mt-2 rounded-md">
                         {isScoringLead ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Re-scoring...</> : <><RefreshCw className="mr-2 h-4 w-4" /> Re-Score Lead</>}
                       </Button>
                     </div>
                   ) : (
                     <div className="text-center">
                       <p className="text-muted-foreground mb-3">No AI score available for this lead yet.</p>
-                      <Button onClick={() => handleScoreLead()} disabled={isScoringLead}>
+                      <Button onClick={() => handleScoreLead()} disabled={isScoringLead} className="rounded-md">
                         {isScoringLead ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Scoring...</> : <><BrainCircuit className="mr-2 h-4 w-4" /> Score Lead with AI</>}
                       </Button>
                     </div>
@@ -480,7 +485,7 @@ export default function AdminLeadsPage() {
                   <Button 
                     onClick={handleConvertToCustomer} 
                     disabled={isConvertingToCustomer} 
-                    className="w-full"
+                    className="w-full rounded-md bg-green-600 hover:bg-green-700 text-white"
                   >
                     {isConvertingToCustomer ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Converting...</> : <><UserCheck className="mr-2 h-4 w-4" /> Convert to Customer</>}
                   </Button>
@@ -489,38 +494,55 @@ export default function AdminLeadsPage() {
             </div>
           )}
           <DialogFooter className="pt-4">
-            <Button variant="outline" onClick={() => setIsViewLeadDialogOpen(false)}>Close</Button>
-             <Button onClick={() => { if(selectedLead) { setIsViewLeadDialogOpen(false); handleEditLead(selectedLead); } }} disabled={selectedLead?.status === "Converted"}>
+            <Button variant="outline" onClick={() => setIsViewLeadDialogOpen(false)} className="rounded-md">Close</Button>
+             <Button onClick={() => { if(selectedLead) { setIsViewLeadDialogOpen(false); handleEditLead(selectedLead); } }} disabled={selectedLead?.status === "Converted"} className="rounded-md">
                 <Edit className="mr-2 h-4 w-4" /> Edit Lead
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Lead Management</h1>
           <p className="text-muted-foreground">Oversee and manage all potential client leads for Luxe Maintainance CRM.</p>
         </div>
+        <div className="flex items-center gap-4">
+             <div className="relative w-64">
+                <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                    type="search"
+                    placeholder="Search leads..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="pl-10 rounded-md bg-card" 
+                />
+            </div>
+            <DialogTrigger asChild>
+                <Button onClick={() => { form.reset({ companyName: "", contactName: "", email: "", phone: "", status: "New", source: "", notes: "" }); setIsAddLeadDialogOpen(true);}} className="rounded-md">
+                    <PlusCircle className="mr-2 h-4 w-4" /> Add New Lead
+                </Button>
+            </DialogTrigger>
+        </div>
       </div>
       
-      <Card className="shadow-lg">
-        <CardHeader>
-          <CardTitle className="flex items-center">
-            <Building className="mr-2 h-5 w-5 text-primary" /> Current Leads ({leads.length})
+      <Card className="shadow-lg rounded-xl">
+        <CardHeader className="border-b">
+          <CardTitle className="flex items-center text-xl">
+            <Building className="mr-2 h-5 w-5 text-primary" /> Current Leads ({filteredLeads.length})
           </CardTitle>
           <CardDescription>View and manage incoming and ongoing leads in the system.</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0">
           {isLoadingLeads ? (
             <div className="flex items-center justify-center py-10">
               <Loader2 className="h-8 w-8 animate-spin text-primary" /><p className="ml-2">Loading leads...</p>
             </div>
-          ) : leads.length > 0 ? (
-            <ul className="space-y-4">
-              {leads.map((lead) => (
-                <li key={lead.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors gap-4 sm:gap-0">
-                  <div className="flex items-center space-x-4">
+          ) : filteredLeads.length > 0 ? (
+            <ul className="divide-y divide-border">
+              {filteredLeads.map((lead) => (
+                <li key={lead.id} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 hover:bg-muted/50 transition-colors gap-4 sm:gap-0">
+                  <div className="flex items-center space-x-4 flex-grow">
                     <Image 
                       src={lead.logoUrl || `https://placehold.co/40x40.png?text=${lead.companyName.substring(0,2).toUpperCase()}`} 
                       alt={lead.companyName} 
@@ -528,33 +550,33 @@ export default function AdminLeadsPage() {
                       className="rounded-md object-contain" 
                       data-ai-hint={lead.dataAiHint || "company logo"}
                     />
-                    <div>
+                    <div className="flex-grow">
                       <p className="font-semibold text-primary">{lead.companyName}</p>
                       <p className="text-sm font-medium">{lead.contactName}</p>
-                      <p className="text-xs text-muted-foreground">{lead.email}{lead.phone && ` • ${lead.phone}`}</p>
+                      <p className="text-xs text-muted-foreground truncate max-w-xs">{lead.email}{lead.phone && ` • ${lead.phone}`}</p>
                     </div>
                   </div>
-                  <div className="flex flex-col sm:items-end sm:space-y-1 w-full sm:w-auto mt-3 sm:mt-0">
+                  <div className="flex flex-col sm:items-end sm:space-y-1 w-full sm:w-auto mt-3 sm:mt-0 sm:ml-4 flex-shrink-0">
                      <Badge variant={getStatusBadgeVariant(lead.status)} className="mb-1 sm:mb-0 self-start sm:self-auto">{lead.status}</Badge>
                      <p className="text-xs text-muted-foreground">Source: {lead.source}</p>
                      <p className="text-xs text-muted-foreground">Added: {lead.dateAdded ? format(lead.dateAdded.toDate(), "PP") : 'N/A'}</p>
-                     <div className="flex space-x-2 mt-2 sm:mt-1 self-start sm:self-auto">
-                        <Button variant="outline" size="sm" onClick={() => handleViewLead(lead)}> 
+                  </div>
+                   <div className="flex space-x-2 mt-2 sm:mt-0 sm:ml-4 self-start sm:self-auto flex-shrink-0 pt-2 sm:pt-0">
+                        <Button variant="outline" size="sm" onClick={() => handleViewLead(lead)} className="rounded-md"> 
                             <Eye className="mr-1 h-3 w-3" /> View
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => handleEditLead(lead)} disabled={lead.status === "Converted"}>
+                        <Button variant="outline" size="sm" onClick={() => handleEditLead(lead)} disabled={lead.status === "Converted"} className="rounded-md">
                             <Edit className="mr-1 h-3 w-3" /> Edit
                         </Button>
                      </div>
-                  </div>
                 </li>
               ))}
             </ul>
           ) : (
             <div className="text-center py-10">
               <Building className="mx-auto h-12 w-12 text-muted-foreground" />
-              <p className="mt-2 text-sm font-medium text-muted-foreground">No leads found.</p>
-              <p className="mt-1 text-xs text-muted-foreground">Click "Add New Lead" to get started.</p>
+              <p className="mt-2 text-sm font-medium text-muted-foreground">No leads found{searchTerm && " matching your search"}.</p>
+              {!searchTerm && <p className="mt-1 text-xs text-muted-foreground">Click "Add New Lead" to get started.</p>}
             </div>
           )}
         </CardContent>

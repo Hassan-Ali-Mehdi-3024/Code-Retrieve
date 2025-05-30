@@ -1,12 +1,14 @@
 import type { Metadata } from "next";
-import { GeistSans } from "geist/font/sans";
-import { GeistMono } from "geist/font/mono";
+import { Poppins } from "next/font/google"; // Changed from GeistSans and GeistMono
 import "./globals.css";
 import { Providers } from "@/components/Providers";
 import { siteConfig } from "@/config/site";
 
-const geistSans = GeistSans;
-const geistMono = GeistMono;
+const poppins = Poppins({ // Configure Poppins
+  subsets: ['latin'],
+  weight: ['300', '400', '500', '600', '700', '800'], // Added more weights for flexibility
+  variable: '--font-poppins', 
+});
 
 export const metadata: Metadata = {
   title: {
@@ -39,10 +41,10 @@ export const metadata: Metadata = {
     title: siteConfig.name,
     description: siteConfig.description,
     images: [siteConfig.ogImage],
-    creator: "@YourTwitterHandle", // Add twitter handle if any
+    creator: "@YourTwitterHandle", 
   },
   icons: {
-    icon: "/favicon.ico", // Assuming you will add a favicon later
+    icon: "/favicon.ico", 
     shortcut: "/favicon-16x16.png",
     apple: "/apple-touch-icon.png",
   },
@@ -56,7 +58,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}
+        className={`${poppins.variable} font-sans antialiased bg-background text-foreground`} // Used Poppins variable
       >
         <Providers>{children}</Providers>
       </body>
